@@ -58,6 +58,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const props = {};
   const files = [];
   if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
+  const oldSheets = {};
   const spreadsheet = {
     getId: () => 'ss1',
     getName: () => 'Pilot Logbook',
@@ -68,7 +69,10 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const ctx = {
     SpreadsheetApp: {
       getActive: () => (standalone ? null : spreadsheet),
-      openById: (id) => (id === 'ss1' ? spreadsheet : null),
+      openById: (id) =>
+        id === 'ss1'
+          ? spreadsheet
+          : { getSheets: () => [{ getDataRange: () => ({ getDisplayValues: () => oldSheets[id] }) }] },
       create: () => spreadsheet,
     },
     PropertiesService: {
@@ -112,7 +116,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   ctx.setup();
   const post = (body) =>
     JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'token-1', ...body }) } }).text);
-  return { ctx, sheets, props, files, post };
+  return { ctx, sheets, props, files, post, oldSheets };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -210,4 +214,40 @@ test('connectionLink gives the web app URL with the access token', () => {
 test('connectionLink turns the editor /dev URL into the deployed /exec URL', () => {
   const { ctx } = load({ serviceUrl: 'https://script.google.com/macros/s/abc/dev' });
   assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
+});
+
+test('old daily checks: UA and GCS of the same drone and day become one check', () => {
+  const { ctx, sheets, post, oldSheets } = load();
+  post({ action: 'sync', push: { aircraft: [{ id: 'd18', updated_at: 't', deleted: 0, name: '18' }] }, since: {} });
+  oldSheets['1Ka2AUNiKkOdYfyfxFSIuDck5ApH_onn7pZ4Mmmvyew0'] = [
+    ['Timestamp', 'Dron №', 'Motors', 'Centre', 'Load', 'Gear', 'Cargo'],
+    ['27/10/2026 11:26:53', '18', 'OK', 'Ok', 'Ok', 'Landing gear need to be replaced in future , Ok', 'No cargo'],
+    ['29/09/2026 09:56:08', '19', 'Ok.', 'Ok', 'ok', 'Ok', 'N/A'],
+  ];
+  oldSheets['1Z2oNDvp5NEIgCE3jyhkCOgUz5AvZrpJ0HAtahKq6UO0'] = [
+    ['Timestamp', 'Dron', 'GCS', 'Power', 'UA', 'RFD', 'FTS', 'Off', 'Storage'],
+    ['27/10/2026 11:37:41', '18', 'Top tablet touchpad', 'Ok', 'Ok', 'Ok', 'Ok', 'Ok', ''],
+    ['28/10/2026 08:00:00', '18', 'Ok', 'Ok', 'Ok', 'RCLH timout', 'Ok', 'No', 'No'],
+  ];
+  assert.strictEqual(ctx.importOldDailyChecks(), 3);
+  const cells = sheets.daily_checks_fb3.cells;
+  const h = cells[0];
+  const rows = cells.slice(1).map((r) => Object.fromEntries(h.map((n, i) => [n, r[i]])));
+  const a = rows.find((r) => r.checked_at === '2026-10-27 11:26:53');
+  assert.strictEqual(a.aircraft_id, 'd18');
+  assert.strictEqual(a.motors_propellers, 'Ok');
+  assert.strictEqual(a.landing_gear, 'Landing gear need to be replaced in future , Ok');
+  assert.strictEqual(a.cargo_compartment, 'Not used');
+  assert.strictEqual(a.power_on_gcs, 'Ok');
+  assert.strictEqual(a.external_rf, '');
+  assert.match(a.notes, /GCS: Top tablet touchpad/);
+  const gcsOnly = rows.find((r) => r.checked_at === '2026-10-28 08:00:00');
+  assert.strictEqual(gcsOnly.rfd_rclh, 'RCLH timout');
+  assert.strictEqual(gcsOnly.switch_off, 'Not used');
+  assert.strictEqual(gcsOnly.motors_propellers, '');
+  // Drone 19 was missing and is added.
+  assert.ok(sheets.aircraft.cells.some((r) => r.includes('19')));
+  // Running it again does not duplicate.
+  ctx.importOldDailyChecks();
+  assert.strictEqual(sheets.daily_checks_fb3.cells.length, 4);
 });
