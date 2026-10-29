@@ -58,7 +58,7 @@ function installTriggers() {
 }
 
 function ensureSheet_(table, formatAll) {
-  const ss = SpreadsheetApp.getActive();
+  const ss = spreadsheet_();
   const columns = SYSTEM_COLUMNS.concat(SCHEMA[table]);
   let sheet = ss.getSheetByName(table);
   if (!sheet) {
@@ -79,6 +79,19 @@ function ensureSheet_(table, formatAll) {
     sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setNumberFormat('@');
   }
   return sheet;
+}
+
+/**
+ * The spreadsheet this script is bound to. A standalone script (made at
+ * script.google.com when Extensions > Apps Script will not open) uses the
+ * SPREADSHEET_ID script property instead.
+ */
+function spreadsheet_() {
+  const active = SpreadsheetApp.getActive();
+  if (active) return active;
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (!id) throw new Error('Set the SPREADSHEET_ID script property to the spreadsheet id');
+  return SpreadsheetApp.openById(id);
 }
 
 function readHeader_(sheet) {
@@ -232,7 +245,7 @@ function uploadPhoto_(req) {
 
 /** Copies the whole spreadsheet into the backup folder, one copy a month. */
 function monthlyBackup() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = spreadsheet_();
   const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
   DriveApp.getFileById(ss.getId()).makeCopy(ss.getName() + ' backup ' + stamp, folder_(BACKUP_FOLDER));
 }

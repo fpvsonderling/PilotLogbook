@@ -53,18 +53,21 @@ class FakeSheet {
   }
 }
 
-function load() {
+function load({ standalone = false } = {}) {
   const sheets = {};
   const props = {};
   const files = [];
+  if (standalone) props.SPREADSHEET_ID = 'ss1';
+  const spreadsheet = {
+    getId: () => 'ss1',
+    getName: () => 'Pilot Logbook',
+    getSheetByName: (n) => sheets[n] || null,
+    insertSheet: (n) => (sheets[n] = new FakeSheet(n)),
+  };
   const ctx = {
     SpreadsheetApp: {
-      getActive: () => ({
-        getId: () => 'ss1',
-        getName: () => 'Pilot Logbook',
-        getSheetByName: (n) => sheets[n] || null,
-        insertSheet: (n) => (sheets[n] = new FakeSheet(n)),
-      }),
+      getActive: () => (standalone ? null : spreadsheet),
+      openById: (id) => (id === 'ss1' ? spreadsheet : null),
     },
     PropertiesService: {
       getScriptProperties: () => ({
@@ -181,4 +184,11 @@ test('photo upload returns the Drive id', () => {
   const { post } = load();
   const out = post({ action: 'uploadPhoto', name: 'p.jpg', data: 'xx' });
   assert.strictEqual(out.drive_file_id, 'f-p.jpg');
+});
+
+test('a standalone script finds the spreadsheet by SPREADSHEET_ID', () => {
+  const { post, sheets } = load({ standalone: true });
+  const out = post({ action: 'sync', push: { flights: [flight('a', 't1')] }, since: {} });
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(sheets.flights.cells.length, 2);
 });
