@@ -27,6 +27,13 @@ class LocalDb {
   DateTime Function() now = () => DateTime.now().toUtc();
 
   void _migrate() {
+    _db.execute(
+      'CREATE TABLE IF NOT EXISTS sync_state '
+      '(table_name TEXT PRIMARY KEY, last_seq INTEGER NOT NULL)',
+    );
+    _db.execute(
+      'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)',
+    );
     for (final t in Tables.all) {
       final cols = [
         'id TEXT PRIMARY KEY',
@@ -39,21 +46,21 @@ class LocalDb {
         for (final r in _db.select('PRAGMA table_info(${t.name})'))
           r['name'] as String,
       };
+      var added = false;
       for (final c in t.allColumns) {
         if (!existing.contains(c.name)) {
           _db.execute(
             'ALTER TABLE ${t.name} ADD COLUMN ${c.name} ${_sqlType(c.type)}',
           );
+          added = true;
         }
       }
+      // Rows pulled before the column existed lost its values; download the
+      // whole table again on the next sync.
+      if (added) {
+        _db.execute('DELETE FROM sync_state WHERE table_name = ?', [t.name]);
+      }
     }
-    _db.execute(
-      'CREATE TABLE IF NOT EXISTS sync_state '
-      '(table_name TEXT PRIMARY KEY, last_seq INTEGER NOT NULL)',
-    );
-    _db.execute(
-      'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)',
-    );
   }
 
   static String _sqlType(ColType t) => switch (t) {

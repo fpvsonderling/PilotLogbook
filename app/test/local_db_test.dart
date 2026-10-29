@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/schema.dart';
@@ -77,5 +79,25 @@ void main() {
     db.delete(Tables.projects, id);
     expect(db.rows(Tables.projects), isEmpty);
     expect(db.dirtyRows(Tables.projects).single['deleted'], 1);
+  });
+
+  test('a column added by an app update makes that table download again', () {
+    final dir = Directory.systemTemp.createTempSync('logbook');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final path = '${dir.path}/db.sqlite';
+
+    // An older app version: flights without battery_id, already synced.
+    final old = LocalDb.open(path);
+    old.setLastSeq(Tables.flights, 120);
+    old.setLastSeq(Tables.people, 7);
+    old.select('ALTER TABLE flights DROP COLUMN battery_id');
+    old.close();
+
+    final updated = LocalDb.open(path);
+    expect(updated.lastSeq(Tables.flights), 0);
+    expect(updated.lastSeq(Tables.people), 7);
+    updated.applyRemote(Tables.flights, {'id': 'f1', 'battery_id': 'b45'});
+    expect(updated.byId(Tables.flights, 'f1')!['battery_id'], 'b45');
+    updated.close();
   });
 }
