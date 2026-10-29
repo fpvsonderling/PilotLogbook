@@ -25,6 +25,8 @@ const SCHEMA = {
   checklist_items: ['template_id', 'position', 'label'],
   checks: ['template_id', 'aircraft_id', 'performed_at', 'performed_by_id', 'notes'],
   check_answers: ['check_id', 'item_id', 'result', 'comment'],
+  daily_checks_fb3: ['checked_at', 'aircraft_id', 'pilot_id', 'motors_propellers', 'centre_plate', 'load_structure', 'landing_gear', 'cargo_compartment', 'external_rf', 'power_on_gcs', 'ua_power_on', 'rfd_rclh', 'fts_rc_video', 'switch_off', 'storage', 'notes'],
+  daily_checks_m30t: ['checked_at', 'aircraft_id', 'pilot_id', 'body_arms', 'propellers_motors', 'gimbal_camera', 'batteries', 'rc_plus', 'before_takeoff', 'notes'],
   faults: ['reported_at', 'aircraft_id', 'battery_id', 'equipment', 'severity', 'description', 'discovered_by_id', 'status', 'repair_started_at', 'technicians', 'work_performed', 'materials_used', 'final_note', 'signatory_id', 'signed_at'],
   fault_photos: ['fault_id', 'drive_file_id', 'url'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],

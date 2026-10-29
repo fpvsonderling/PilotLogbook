@@ -1,3 +1,4 @@
+import 'checklists.dart';
 import 'local_db.dart';
 import 'schema.dart';
 
@@ -30,6 +31,23 @@ String formatDuration(int? seconds) {
   final m = (seconds % 3600) ~/ 60;
   final s = seconds % 60;
   return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+}
+
+/// One saved daily check and the checklist it was made with.
+class DailyCheck {
+  const DailyCheck(this.checklist, this.row);
+  final Checklist checklist;
+  final DbRow row;
+
+  String get id => row['id'] as String;
+  String get checkedAt => row['checked_at'] as String? ?? '';
+
+  /// Sections marked as a problem, with the pilot's note.
+  List<(ChecklistSection, String)> get problems => [
+    for (final s in checklist.sections)
+      if (sectionResult(row[s.column]) == SectionResult.problem)
+        (s, row[s.column].toString()),
+  ];
 }
 
 class PilotStat {
@@ -72,6 +90,33 @@ class Logbook {
     args: kind == null ? const [] : [kind],
     orderBy: 'date DESC, takeoff_at DESC',
   );
+
+  /// Daily checks of every drone type, newest first.
+  List<DailyCheck> dailyChecks({String? aircraftId, int? limit}) {
+    final all = [
+      for (final c in checklists)
+        for (final r in db.rows(
+          c.table,
+          where: aircraftId == null ? null : 'aircraft_id = ?',
+          args: aircraftId == null ? const [] : [aircraftId],
+        ))
+          DailyCheck(c, r),
+    ]..sort((a, b) => b.checkedAt.compareTo(a.checkedAt));
+    return limit == null || all.length <= limit ? all : all.sublist(0, limit);
+  }
+
+  /// Problems found in the last [checks] daily checks of a drone, to review
+  /// before powering it on. [exceptId] leaves out the check being edited.
+  List<(DailyCheck, ChecklistSection, String)> recentProblems(
+    String aircraftId, {
+    String? exceptId,
+    int checks = 3,
+  }) => [
+    for (final c in dailyChecks(
+      aircraftId: aircraftId,
+    ).where((c) => c.id != exceptId).take(checks))
+      for (final (section, note) in c.problems) (c, section, note),
+  ];
 
   /// Flights and flight time per remote pilot (RP), most flights first.
   List<PilotStat> pilotStats() => _stats('rp_id', withTime: true);

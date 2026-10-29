@@ -114,6 +114,40 @@ class Tables {
     Col('comment'),
   ]);
 
+  // Daily checks: one row per check, one column per checklist section with
+  // "Ok", "Not used" or the pilot's note (see checklists.dart).
+  static const dailyChecksFb3 = TableDef('daily_checks_fb3', [
+    Col('checked_at'), // yyyy-MM-dd HH:mm:ss, local time
+    Col('aircraft_id'),
+    Col('pilot_id'),
+    Col('motors_propellers'),
+    Col('centre_plate'),
+    Col('load_structure'),
+    Col('landing_gear'),
+    Col('cargo_compartment'),
+    Col('external_rf'),
+    Col('power_on_gcs'),
+    Col('ua_power_on'),
+    Col('rfd_rclh'),
+    Col('fts_rc_video'),
+    Col('switch_off'),
+    Col('storage'),
+    Col('notes'),
+  ]);
+
+  static const dailyChecksM30t = TableDef('daily_checks_m30t', [
+    Col('checked_at'),
+    Col('aircraft_id'),
+    Col('pilot_id'),
+    Col('body_arms'),
+    Col('propellers_motors'),
+    Col('gimbal_camera'),
+    Col('batteries'),
+    Col('rc_plus'),
+    Col('before_takeoff'),
+    Col('notes'),
+  ]);
+
   static const faults = TableDef('faults', [
     Col('reported_at'),
     Col('aircraft_id'),
@@ -162,6 +196,8 @@ class Tables {
     checklistItems,
     checks,
     checkAnswers,
+    dailyChecksFb3,
+    dailyChecksM30t,
     faults,
     faultPhotos,
     torqueSpecs,
