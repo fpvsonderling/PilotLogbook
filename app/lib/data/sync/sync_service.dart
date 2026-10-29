@@ -27,6 +27,8 @@ class AppsScriptTransport implements SyncTransport {
   final String url;
   final http.Client _client;
 
+  static const _redirects = {301, 302, 303, 307, 308};
+
   @override
   Future<Map<String, Object?>> call(Map<String, Object?> body) async {
     final request = http.Request('POST', Uri.parse(url))
@@ -37,7 +39,8 @@ class AppsScriptTransport implements SyncTransport {
     // Apps Script answers a POST with a redirect to the result, which must be
     // fetched with GET; the http package does not follow it for POST.
     final location = response.headers['location'];
-    if (response.isRedirect && location != null) {
+    // isRedirect is false for a 302 answer to a POST, so check the status.
+    if (_redirects.contains(response.statusCode) && location != null) {
       response = await _client.get(Uri.parse(location));
     }
     if (response.statusCode != 200) {
