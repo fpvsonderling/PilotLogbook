@@ -90,11 +90,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Motors and Propellers'), findsOneWidget);
 
-    // Problem on the first section, by tapping the item itself.
-    final item = find.text('Propellers: no cracks / deformation');
-    await tester.tap(item);
+    // First section item by item: one problem, the rest OK.
+    final first = fb3Checklist.sections.first;
+    for (final item in first.items) {
+      await tester.tap(find.text(item));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('OK').evaluate().length, greaterThan(1)); // badge + button
+    // A second tap turns one item into a problem; the others stay OK.
+    await tester.tap(find.text('Propellers: no cracks / deformation'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('crack'));
+    await tester.pumpAndSettle();
+    // Flag another item and clear it again: its part of the note goes away.
+    await tester.tap(find.text('No motor play (move prop tip up/down)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('No motor play (move prop tip up/down)'));
     await tester.pumpAndSettle();
 
     // OK on every other section, N/A on the cargo compartment.

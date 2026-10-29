@@ -42,6 +42,13 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
   String? _pilotId;
   late String _checkedAt;
   final _results = <String, SectionResult>{};
+
+  /// Per-item marks (item index -> ok / problem) by section column.
+  final _items = <String, Map<int, SectionResult>>{};
+
+  /// Sections set to Problem with the button, not by flagging an item; they
+  /// stay a problem even when every item is ticked OK.
+  final _manualProblem = <String>{};
   final _notes = <String, TextEditingController>{};
   late final _generalNotes = TextEditingController(
     text: widget.check?.row['notes'] as String?,
@@ -61,8 +68,15 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
       final r = sectionResult(row![s.column]);
       if (r == null) continue;
       _results[s.column] = r;
+      if (r == SectionResult.ok) _setAllItems(s, SectionResult.ok);
       if (r == SectionResult.problem) {
-        _note(s.column).text = row[s.column].toString();
+        final note = row[s.column].toString();
+        _note(s.column).text = note;
+        final items = _itemsOf(s);
+        for (var i = 0; i < s.items.length; i++) {
+          if (note.contains(s.items[i])) items[i] = SectionResult.problem;
+        }
+        if (items.isEmpty) _manualProblem.add(s.column);
       }
     }
   }
@@ -102,26 +116,77 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
     setState(() {
       _aircraftId = id;
       // Another drone type has other sections.
-      if (_checklist(db) != before) _results.clear();
+      if (_checklist(db) != before) {
+        _results.clear();
+        _items.clear();
+        _manualProblem.clear();
+      }
     });
   }
 
+  Map<int, SectionResult> _itemsOf(ChecklistSection s) =>
+      _items.putIfAbsent(s.column, () => {});
+
+  void _setAllItems(ChecklistSection s, SectionResult? r) {
+    final items = _itemsOf(s)..clear();
+    if (r != null) {
+      for (var i = 0; i < s.items.length; i++) {
+        items[i] = r;
+      }
+    }
+  }
+
   void _mark(ChecklistSection s, SectionResult r) => setState(() {
-    if (_results[s.column] == r) {
+    final off = _results[s.column] == r;
+    _manualProblem.remove(s.column);
+    if (off) {
       _results.remove(s.column);
-    } else {
-      _results[s.column] = r;
+      if (r == SectionResult.ok) _setAllItems(s, null);
+      return;
+    }
+    _results[s.column] = r;
+    switch (r) {
+      case SectionResult.ok:
+        _setAllItems(s, SectionResult.ok);
+      case SectionResult.notUsed:
+        _setAllItems(s, null);
+      case SectionResult.problem:
+        _manualProblem.add(s.column);
     }
   });
 
-  /// Tapping one item marks the section as a problem and names the item.
-  void _flagItem(ChecklistSection s, String item) => setState(() {
-    _results[s.column] = SectionResult.problem;
+  /// Tapping an item cycles it: OK, then problem, then unmarked. The
+  /// section follows: any problem makes it a problem, all OK makes it OK.
+  void _tapItem(ChecklistSection s, int index) => setState(() {
+    final items = _itemsOf(s);
+    final item = s.items[index];
     final note = _note(s.column);
-    if (!note.text.contains(item)) {
-      note.text = note.text.trim().isEmpty
-          ? '$item: '
-          : '${note.text}; $item: ';
+    switch (items[index]) {
+      case null:
+        items[index] = SectionResult.ok;
+      case SectionResult.ok:
+        items[index] = SectionResult.problem;
+        if (!note.text.contains(item)) {
+          note.text = note.text.trim().isEmpty
+              ? '$item: '
+              : '${note.text.trimRight()}; $item: ';
+        }
+      case _:
+        items.remove(index);
+        // Drop the item's own part of the note.
+        note.text = note.text
+            .split(';')
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty && !p.startsWith('$item:'))
+            .join('; ');
+    }
+    if (items.containsValue(SectionResult.problem) ||
+        _manualProblem.contains(s.column)) {
+      _results[s.column] = SectionResult.problem;
+    } else if (items.length == s.items.length) {
+      _results[s.column] = SectionResult.ok;
+    } else {
+      _results.remove(s.column);
     }
   });
 
@@ -236,8 +301,9 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
           section: s,
           result: _results[s.column],
           note: _note(s.column),
+          items: _itemsOf(s),
           onMark: (r) => _mark(s, r),
-          onItem: (item) => _flagItem(s, item),
+          onItem: (i) => _tapItem(s, i),
           onPhrase: (p) => _addPhrase(s, p),
         ),
       );
@@ -496,6 +562,7 @@ class _SectionCard extends StatelessWidget {
     required this.result,
     required this.note,
     required this.onMark,
+    required this.items,
     required this.onItem,
     required this.onPhrase,
   });
@@ -504,7 +571,8 @@ class _SectionCard extends StatelessWidget {
   final SectionResult? result;
   final TextEditingController note;
   final ValueChanged<SectionResult> onMark;
-  final ValueChanged<String> onItem;
+  final Map<int, SectionResult> items;
+  final ValueChanged<int> onItem;
   final ValueChanged<String> onPhrase;
 
   @override
@@ -625,16 +693,24 @@ class _SectionCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Column(
                     children: [
-                      for (final item in section.items)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Tap an item: OK → problem → clear',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                      for (var i = 0; i < section.items.length; i++)
                         _Item(
-                          text: item,
-                          state: result == SectionResult.ok
-                              ? SectionResult.ok
-                              : result == SectionResult.problem &&
-                                    note.text.contains(item)
-                              ? SectionResult.problem
-                              : null,
-                          onTap: () => onItem(item),
+                          text: section.items[i],
+                          state: items[i],
+                          onTap: () => onItem(i),
                         ),
                     ],
                   ),
