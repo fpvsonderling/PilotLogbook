@@ -87,6 +87,20 @@ class SyncService extends ChangeNotifier {
   String? get token => db.setting(tokenKey);
   bool get configured => (url ?? '').isNotEmpty && (token ?? '').isNotEmpty;
 
+  /// The link connectionLink() prints in Apps Script: the web app URL with
+  /// the access token as ?key=. Saves both; false when the link is not one.
+  bool setConnectionLink(String link) {
+    final uri = Uri.tryParse(link.trim());
+    final key = uri?.queryParameters['key'] ?? '';
+    if (uri == null || !uri.isScheme('https') || key.isEmpty) return false;
+    db.setSetting(urlKey, link.trim().split('?').first);
+    db.setSetting(tokenKey, key);
+    notifyListeners();
+    return true;
+  }
+
+  String get connectionLink => configured ? '$url?key=$token' : '';
+
   /// Builds the transport from settings; replaced in tests.
   SyncTransport Function(String url) transportFactory = AppsScriptTransport.new;
 

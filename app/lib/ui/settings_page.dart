@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../data/sync/sync_service.dart';
 import 'services.dart';
 
-/// Where the spreadsheet's Apps Script lives and its access token.
+/// The connection link to the spreadsheet's Apps Script.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -12,28 +11,35 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  TextEditingController? _url;
-  TextEditingController? _token;
+  TextEditingController? _link;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final sync = Services.of(context).sync;
-    _url ??= TextEditingController(text: sync.url);
-    _token ??= TextEditingController(text: sync.token);
+    _link ??= TextEditingController(
+      text: Services.of(context).sync.connectionLink,
+    );
   }
 
   @override
   void dispose() {
-    _url?.dispose();
-    _token?.dispose();
+    _link?.dispose();
     super.dispose();
   }
 
   Future<void> _saveAndSync() async {
     final services = Services.of(context);
-    services.db.setSetting(SyncService.urlKey, _url!.text.trim());
-    services.db.setSetting(SyncService.tokenKey, _token!.text.trim());
+    if (!services.sync.setConnectionLink(_link!.text)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This is not a connection link. Run connectionLink in Apps Script '
+            'and copy the whole line that starts with https://',
+          ),
+        ),
+      );
+      return;
+    }
     final result = await services.sync.sync();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -59,20 +65,16 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Paste the web app URL and the access token from the spreadsheet\'s '
-          'Apps Script (see README).',
+          'Paste the link that connectionLink printed in Apps Script '
+          '(see README).',
         ),
         TextField(
-          controller: _url,
+          key: const Key('connection-link'),
+          controller: _link,
           decoration: const InputDecoration(
-            labelText: 'Web app URL',
-            hintText: 'https://script.google.com/macros/s/.../exec',
+            labelText: 'Connection link',
+            hintText: 'https://script.google.com/macros/s/.../exec?key=...',
           ),
-        ),
-        TextField(
-          controller: _token,
-          decoration: const InputDecoration(labelText: 'Access token'),
-          obscureText: true,
         ),
         const SizedBox(height: 16),
         Align(

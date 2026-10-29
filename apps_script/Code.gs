@@ -1,6 +1,7 @@
 /**
- * Pilot Logbook backend: this script lives inside the Google Sheets
- * spreadsheet that holds all data (Extensions > Apps Script).
+ * Pilot Logbook backend: a Google Apps Script project that keeps all data in
+ * one Google Sheets spreadsheet. It can live inside the spreadsheet
+ * (Extensions > Apps Script) or stand alone at script.google.com.
  *
  * - One tab per table, row 1 = column names, every cell stored as text.
  * - The app sends one POST per sync: its changed rows, and for each table the
@@ -8,8 +9,8 @@
  *   updated_at wins) and answers with every row changed since.
  * - monthlyBackup() copies the spreadsheet to a Drive folder on the 1st.
  *
- * Setup: run setup() once, then Deploy > New deployment > Web app,
- * execute as "Me", access "Anyone". See README.md.
+ * Setup: run setup(), then Deploy > New deployment > Web app (execute as
+ * "Me", access "Anyone"), then run connectionLink(). See README.md.
  */
 
 // SCHEMA-START (kept equal to app/lib/data/schema.dart by a test)
@@ -37,16 +38,41 @@ const PHOTO_FOLDER = 'PilotLogbook Photos';
 
 // ------------------------------------------------------------------ setup
 
-/** Creates missing tabs and columns and the access token. Safe to rerun. */
+/**
+ * Step 1 of setup. Creates the spreadsheet (when this script is not inside
+ * one), all tabs and columns, the access token and the monthly backup.
+ * Safe to rerun.
+ */
 function setup() {
-  Object.keys(SCHEMA).forEach(function (table) { ensureSheet_(table, true); });
   const props = PropertiesService.getScriptProperties();
+  if (!SpreadsheetApp.getActive() && !props.getProperty('SPREADSHEET_ID')) {
+    const created = SpreadsheetApp.create('Pilot Logbook');
+    props.setProperty('SPREADSHEET_ID', created.getId());
+  }
+  Object.keys(SCHEMA).forEach(function (table) { ensureSheet_(table, true); });
   if (!props.getProperty('API_TOKEN')) {
     props.setProperty('API_TOKEN', Utilities.getUuid());
   }
   if (!props.getProperty('SEQ')) props.setProperty('SEQ', '0');
   installTriggers();
-  Logger.log('API token for the app: ' + props.getProperty('API_TOKEN'));
+  Logger.log('Done. Spreadsheet: ' + spreadsheet_().getUrl());
+  Logger.log('Next: Deploy > New deployment > Web app, then run connectionLink.');
+}
+
+/**
+ * Step 2, after Deploy > New deployment > Web app: prints the one link to
+ * paste into the app's Settings (web app URL with the access token).
+ */
+function connectionLink() {
+  const url = ScriptApp.getService().getUrl();
+  if (!url) {
+    Logger.log('Not deployed yet: Deploy > New deployment > Web app, then run this again.');
+    return null;
+  }
+  const link = url + '?key=' + PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  Logger.log('Paste this into the app (Settings > Connection link):');
+  Logger.log(link);
+  return link;
 }
 
 /** Monthly backup on the 1st at about 03:00 (the spreadsheet's time zone). */
@@ -83,14 +109,14 @@ function ensureSheet_(table, formatAll) {
 
 /**
  * The spreadsheet this script is bound to. A standalone script (made at
- * script.google.com when Extensions > Apps Script will not open) uses the
- * SPREADSHEET_ID script property instead.
+ * script.google.com) uses the spreadsheet setup() created, or any id put in
+ * the SPREADSHEET_ID script property.
  */
 function spreadsheet_() {
   const active = SpreadsheetApp.getActive();
   if (active) return active;
   const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  if (!id) throw new Error('Set the SPREADSHEET_ID script property to the spreadsheet id');
+  if (!id) throw new Error('Run setup first');
   return SpreadsheetApp.openById(id);
 }
 

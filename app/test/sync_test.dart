@@ -124,6 +124,27 @@ void main() {
     expect(a.pendingCount, 1);
   });
 
+  test('the connection link sets the URL and the token', () {
+    final a = SyncService(LocalDb.inMemory());
+    expect(a.setConnectionLink('hello'), isFalse);
+    expect(
+      a.setConnectionLink('https://script.google.com/macros/s/abc/exec'),
+      isFalse,
+    );
+    expect(
+      a.setConnectionLink(
+        ' https://script.google.com/macros/s/abc/exec?key=t-1 ',
+      ),
+      isTrue,
+    );
+    expect(a.url, 'https://script.google.com/macros/s/abc/exec');
+    expect(a.token, 't-1');
+    expect(
+      a.connectionLink,
+      'https://script.google.com/macros/s/abc/exec?key=t-1',
+    );
+  });
+
   test('without settings sync does nothing', () async {
     final a = SyncService(LocalDb.inMemory());
     expect(await a.sync(), isNull);

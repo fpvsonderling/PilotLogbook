@@ -53,14 +53,15 @@ class FakeSheet {
   }
 }
 
-function load({ standalone = false } = {}) {
+function load({ standalone = false, fresh = false } = {}) {
   const sheets = {};
   const props = {};
   const files = [];
-  if (standalone) props.SPREADSHEET_ID = 'ss1';
+  if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
   const spreadsheet = {
     getId: () => 'ss1',
     getName: () => 'Pilot Logbook',
+    getUrl: () => 'https://docs.google.com/spreadsheets/d/ss1/edit',
     getSheetByName: (n) => sheets[n] || null,
     insertSheet: (n) => (sheets[n] = new FakeSheet(n)),
   };
@@ -68,6 +69,7 @@ function load({ standalone = false } = {}) {
     SpreadsheetApp: {
       getActive: () => (standalone ? null : spreadsheet),
       openById: (id) => (id === 'ss1' ? spreadsheet : null),
+      create: () => spreadsheet,
     },
     PropertiesService: {
       getScriptProperties: () => ({
@@ -81,6 +83,7 @@ function load({ standalone = false } = {}) {
       createTextOutput: (text) => ({ text, setMimeType() { return this; } }),
     },
     ScriptApp: {
+      getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/abc/exec' }),
       getProjectTriggers: () => [],
       deleteTrigger() {},
       newTrigger: () => {
@@ -191,4 +194,15 @@ test('a standalone script finds the spreadsheet by SPREADSHEET_ID', () => {
   const out = post({ action: 'sync', push: { flights: [flight('a', 't1')] }, since: {} });
   assert.strictEqual(out.ok, true);
   assert.strictEqual(sheets.flights.cells.length, 2);
+});
+
+test('setup in a fresh standalone script creates the spreadsheet', () => {
+  const { sheets, props } = load({ standalone: true, fresh: true });
+  assert.strictEqual(props.SPREADSHEET_ID, 'ss1');
+  assert.ok(sheets.flights);
+});
+
+test('connectionLink gives the web app URL with the access token', () => {
+  const { ctx } = load();
+  assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
 });
