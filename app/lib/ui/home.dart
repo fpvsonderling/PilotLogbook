@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'daily_checks_page.dart';
 import 'flights_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
@@ -19,6 +20,7 @@ class _HomePageState extends State<HomePage> {
   static const _pages = [
     (Icons.flight_takeoff, 'Cargo LogBook'),
     (Icons.search, 'Inspection LogBook'),
+    (Icons.checklist, 'Daily checks'),
     (Icons.favorite, 'Pilot Statistic'),
     (Icons.list_alt, 'Reference data'),
     (Icons.settings, 'Settings'),
@@ -27,33 +29,58 @@ class _HomePageState extends State<HomePage> {
   Widget _page() => switch (_index) {
     0 => const FlightsPage(kind: 'cargo', title: 'Cargo LogBook'),
     1 => const FlightsPage(kind: 'inspection', title: 'Inspection LogBook'),
-    2 => const StatsPage(),
-    3 => const ReferencePage(),
+    2 => const DailyChecksPage(),
+    3 => const StatsPage(),
+    4 => const ReferencePage(),
     _ => const SettingsPage(),
   };
 
   @override
   Widget build(BuildContext context) {
+    // Phones get a drawer; wider windows keep the rail always visible.
+    final narrow = MediaQuery.sizeOf(context).width < 700;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pilot Logbook'),
+        title: Text(narrow ? _pages[_index].$2 : 'Pilot Logbook'),
         actions: const [SyncButton(), SizedBox(width: 8)],
       ),
-      body: Row(
-        children: [
-          NavigationRail(
-            selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
-            labelType: NavigationRailLabelType.all,
-            destinations: [
-              for (final (icon, label) in _pages)
-                NavigationRailDestination(icon: Icon(icon), label: Text(label)),
-            ],
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(child: _page()),
-        ],
-      ),
+      drawer: narrow
+          ? NavigationDrawer(
+              selectedIndex: _index,
+              onDestinationSelected: (i) {
+                setState(() => _index = i);
+                Navigator.pop(context);
+              },
+              children: [
+                const SizedBox(height: 16),
+                for (final (icon, label) in _pages)
+                  NavigationDrawerDestination(
+                    icon: Icon(icon),
+                    label: Text(label),
+                  ),
+              ],
+            )
+          : null,
+      body: narrow
+          ? _page()
+          : Row(
+              children: [
+                NavigationRail(
+                  selectedIndex: _index,
+                  onDestinationSelected: (i) => setState(() => _index = i),
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final (icon, label) in _pages)
+                      NavigationRailDestination(
+                        icon: Icon(icon),
+                        label: Text(label),
+                      ),
+                  ],
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(child: _page()),
+              ],
+            ),
     );
   }
 }
@@ -83,11 +110,18 @@ class SyncButton extends StatelessWidget {
         return Tooltip(
           message: tip,
           child: TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              disabledForegroundColor: Colors.white70,
+            ),
             onPressed: sync.running ? null : sync.sync,
             icon: sync.running
                 ? const SizedBox.square(
                     dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
                   )
                 : Icon(
                     sync.lastError != null || !sync.configured

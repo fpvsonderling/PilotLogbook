@@ -7,6 +7,7 @@ import 'data/logbook.dart';
 import 'data/sync/sync_service.dart';
 import 'ui/home.dart';
 import 'ui/services.dart';
+import 'ui/theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,10 +60,8 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
       child: MaterialApp(
         title: 'Pilot Logbook',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF00A0B0),
-          visualDensity: VisualDensity.compact,
-        ),
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
         home: const HomePage(),
       ),
     );
