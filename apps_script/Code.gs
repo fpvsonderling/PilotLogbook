@@ -20,7 +20,7 @@ const SCHEMA = {
   aircraft: ['name', 'model', 'serial', 'active'],
   batteries: ['name', 'set_name', 'serial', 'active'],
   mission_types: ['name', 'active'],
-  flights: ['date', 'kind', 'project_id', 'aircraft_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes'],
+  flights: ['date', 'kind', 'project_id', 'aircraft_id', 'battery_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes'],
   checklist_templates: ['name', 'kind', 'active'],
   checklist_items: ['template_id', 'position', 'label'],
   checks: ['template_id', 'aircraft_id', 'performed_at', 'performed_by_id', 'notes'],

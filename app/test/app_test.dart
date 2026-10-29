@@ -15,6 +15,7 @@ void main() {
     final db = LocalDb.inMemory();
     db.save(Tables.projects, {'name': 'Tjaereborg Enge', 'active': 1});
     db.save(Tables.aircraft, {'name': '18', 'active': 1});
+    final battery = db.save(Tables.batteries, {'name': '45', 'active': 1});
     db.save(Tables.people, {
       'name': 'Pavlo Yavorskyi',
       'roles': 'pilot',
@@ -29,6 +30,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Tjaereborg Enge'));
     await tester.tap(find.text('18'));
+    await tester.tap(find.text('45'));
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Take off'),
       '13:00:00',
@@ -37,7 +39,6 @@ void main() {
       find.widgetWithText(TextFormField, 'Land'),
       '13:03:30',
     );
-    await tester.enterText(find.widgetWithText(TextFormField, 'Batt %'), '45');
     await tester.enterText(find.widgetWithText(TextFormField, 'What'), 'Fio');
     await tester.pumpAndSettle();
     // Pick the suggestion, which also closes the suggestion list.
@@ -57,7 +58,7 @@ void main() {
     expect(flight['mission'], 'Fiona Pickup');
     expect(flight['kind'], 'cargo');
     expect(flight['duration_s'], 210);
-    expect(flight['battery_pct'], 45);
+    expect(flight['battery_id'], battery);
     expect(find.text('0:03:30'), findsOneWidget);
     expect(find.text('Cargo LogBook · 1 flights'), findsOneWidget);
   });

@@ -46,6 +46,7 @@ class FlightsPage extends StatelessWidget {
           final flights = logbook.flights(kind: kind);
           final projects = logbook.names(Tables.projects);
           final aircraft = logbook.names(Tables.aircraft);
+          final batteries = logbook.names(Tables.batteries);
           final people = logbook.names(Tables.people);
           final days = <String, List<DbRow>>{};
           for (final f in flights) {
@@ -103,7 +104,7 @@ class FlightsPage extends StatelessWidget {
                                       f['takeoff_at'] as String? ?? '',
                                       f['landing_at'] as String? ?? '',
                                       formatDuration(f['duration_s'] as int?),
-                                      '${f['battery_pct'] ?? ''}',
+                                      batteries[f['battery_id']] ?? '',
                                       '${f['used'] ?? ''}',
                                       '${f['temp_c'] ?? ''}',
                                       f['mission'] as String? ?? '',

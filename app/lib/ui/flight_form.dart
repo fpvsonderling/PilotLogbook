@@ -41,7 +41,6 @@ class _FlightFormState extends State<FlightForm> {
   late final _landing = TextEditingController(
     text: _v['landing_at'] as String?,
   );
-  late final _battery = TextEditingController(text: _text('battery_pct'));
   late final _used = TextEditingController(text: _text('used'));
   late final _temp = TextEditingController(text: _text('temp_c'));
   late final _mission = TextEditingController(text: _v['mission'] as String?);
@@ -61,15 +60,7 @@ class _FlightFormState extends State<FlightForm> {
 
   @override
   void dispose() {
-    for (final c in [
-      _takeoff,
-      _landing,
-      _battery,
-      _used,
-      _temp,
-      _mission,
-      _notes,
-    ]) {
+    for (final c in [_takeoff, _landing, _used, _temp, _mission, _notes]) {
       c.dispose();
     }
     _missionFocus.dispose();
@@ -85,7 +76,6 @@ class _FlightFormState extends State<FlightForm> {
       'takeoff_at': _takeoff.text.trim(),
       'landing_at': _landing.text.trim(),
       'duration_s': flightSeconds(_takeoff.text, _landing.text),
-      'battery_pct': int.tryParse(_battery.text.trim()),
       'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
       'temp_c': int.tryParse(_temp.text.trim()),
       'mission': _mission.text.trim(),
@@ -181,10 +171,14 @@ class _FlightFormState extends State<FlightForm> {
                   controller: _landing,
                   now: () => _timeFormat.format(DateTime.now()),
                 ),
+                _ChoiceField(
+                  label: 'Battery',
+                  options: logbook.names(Tables.batteries, activeOnly: true),
+                  value: _v['battery_id'] as String?,
+                  onChanged: (id) => setState(() => _v['battery_id'] = id),
+                ),
                 Row(
                   children: [
-                    Expanded(child: _number('Batt %', _battery)),
-                    const SizedBox(width: 12),
                     Expanded(child: _number('Used', _used, decimal: true)),
                     const SizedBox(width: 12),
                     Expanded(child: _number('Temp °C', _temp)),

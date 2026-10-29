@@ -71,9 +71,12 @@ class Tables {
     Col('kind'), // cargo | inspection
     Col('project_id'),
     Col('aircraft_id'),
+    Col('battery_id'),
     Col('takeoff_at'), // HH:mm:ss
     Col('landing_at'), // HH:mm:ss
     Col('duration_s', ColType.integer),
+    // Not filled by the app: AppSheet's "Batt" turned out to be the battery
+    // number, now battery_id. Kept so existing sheets keep their column.
     Col('battery_pct', ColType.integer),
     Col('used', ColType.real),
     Col('temp_c', ColType.integer),
