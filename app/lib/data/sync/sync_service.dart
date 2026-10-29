@@ -93,7 +93,13 @@ class SyncService extends ChangeNotifier {
     final uri = Uri.tryParse(link.trim());
     final key = uri?.queryParameters['key'] ?? '';
     if (uri == null || !uri.isScheme('https') || key.isEmpty) return false;
-    db.setSetting(urlKey, link.trim().split('?').first);
+    // The /dev URL only works for the script owner; the deployment is /exec.
+    final url = link
+        .trim()
+        .split('?')
+        .first
+        .replaceFirst(RegExp(r'/dev$'), '/exec');
+    db.setSetting(urlKey, url);
     db.setSetting(tokenKey, key);
     notifyListeners();
     return true;

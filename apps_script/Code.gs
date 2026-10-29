@@ -69,7 +69,10 @@ function connectionLink() {
     Logger.log('Not deployed yet: Deploy > New deployment > Web app, then run this again.');
     return null;
   }
-  const link = url + '?key=' + PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  // Run from the editor, getUrl() gives the owner-only /dev URL; the app
+  // needs the deployed /exec one, which has the same id.
+  const link = url.replace(/\/dev$/, '/exec') + '?key=' +
+    PropertiesService.getScriptProperties().getProperty('API_TOKEN');
   Logger.log('Paste this into the app (Settings > Connection link):');
   Logger.log(link);
   return link;

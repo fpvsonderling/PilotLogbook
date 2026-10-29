@@ -53,7 +53,7 @@ class FakeSheet {
   }
 }
 
-function load({ standalone = false, fresh = false } = {}) {
+function load({ standalone = false, fresh = false, serviceUrl = 'https://script.google.com/macros/s/abc/exec' } = {}) {
   const sheets = {};
   const props = {};
   const files = [];
@@ -83,7 +83,7 @@ function load({ standalone = false, fresh = false } = {}) {
       createTextOutput: (text) => ({ text, setMimeType() { return this; } }),
     },
     ScriptApp: {
-      getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/abc/exec' }),
+      getService: () => ({ getUrl: () => serviceUrl }),
       getProjectTriggers: () => [],
       deleteTrigger() {},
       newTrigger: () => {
@@ -204,5 +204,10 @@ test('setup in a fresh standalone script creates the spreadsheet', () => {
 
 test('connectionLink gives the web app URL with the access token', () => {
   const { ctx } = load();
+  assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
+});
+
+test('connectionLink turns the editor /dev URL into the deployed /exec URL', () => {
+  const { ctx } = load({ serviceUrl: 'https://script.google.com/macros/s/abc/dev' });
   assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
 });
