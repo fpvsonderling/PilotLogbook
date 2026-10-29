@@ -262,6 +262,133 @@ function text_(v) {
   return String(v);
 }
 
+// ------------------------------------------------- old daily checks import
+
+const OLD_UA_CHECKS = '1Ka2AUNiKkOdYfyfxFSIuDck5ApH_onn7pZ4Mmmvyew0';
+const OLD_GCS_CHECKS = '1Z2oNDvp5NEIgCE3jyhkCOgUz5AvZrpJ0HAtahKq6UO0';
+
+// Old Google Form columns, in order after Timestamp and drone number.
+const OLD_UA_COLUMNS = ['motors_propellers', 'centre_plate', 'load_structure', 'landing_gear', 'cargo_compartment'];
+const OLD_GCS_COLUMNS = ['ground_control_station', 'power_on_gcs', 'ua_power_on', 'rfd_rclh', 'fts_rc_video', 'switch_off', 'storage'];
+
+/**
+ * Run once from the editor: copies the old Google Form daily checks (UA and
+ * GCS responses) into daily_checks_fb3. A UA and a GCS answer for the same
+ * drone on the same day become one check. The old sheets are only read.
+ * Safe to rerun: rows keep the same ids and are overwritten, unless they
+ * were edited in the app since.
+ */
+function importOldDailyChecks() {
+  const ua = readOldChecks_(OLD_UA_CHECKS, OLD_UA_COLUMNS);
+  const gcs = readOldChecks_(OLD_GCS_CHECKS, OLD_GCS_COLUMNS);
+  const out = buildImportedChecks_(ua, gcs, aircraftIds_());
+  const res = sync_({ push: { aircraft: out.aircraft, daily_checks_fb3: out.checks }, since: {} });
+  Logger.log('Imported ' + res.accepted.daily_checks_fb3.length + ' daily checks (' +
+    ua.length + ' UA and ' + gcs.length + ' GCS answers), ' + out.aircraft.length + ' new drones.');
+  return res.accepted.daily_checks_fb3.length;
+}
+
+function readOldChecks_(spreadsheetId, columns) {
+  const sheet = SpreadsheetApp.openById(spreadsheetId).getSheets()[0];
+  const rows = sheet.getDataRange().getDisplayValues().slice(1);
+  return rows.filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
+    const o = { at: oldTimestamp_(r[0]), drone: String(r[1]).trim() };
+    columns.forEach(function (c, i) { o[c] = String(r[i + 2] === undefined ? '' : r[i + 2]).trim(); });
+    return o;
+  }).filter(function (o) { return o.at && o.drone; });
+}
+
+/** "14/03/2026 18:23:08" -> "2026-03-14 18:23:08" */
+function oldTimestamp_(v) {
+  const m = String(v).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return '';
+  const p = function (n) { return ('0' + n).slice(-2); };
+  return m[3] + '-' + p(m[2]) + '-' + p(m[1]) + ' ' + p(m[4]) + ':' + m[5] + ':' + (m[6] || '00');
+}
+
+/** Old free-text answers to the app's values: "Ok", "Not used" or the note. */
+function oldValue_(v) {
+  const t = String(v || '').trim();
+  const k = t.toLowerCase().replace(/[.\s]+$/, '');
+  if (k === '') return '';
+  if (['ok', 'ook'].indexOf(k) >= 0) return 'Ok';
+  if (['n/a', 'na', 'no', 'not applicable', 'not used', 'no cargo', 'no cg'].indexOf(k) >= 0) return 'Not used';
+  return t;
+}
+
+function aircraftIds_() {
+  const sheet = ensureSheet_('aircraft', false);
+  const header = readHeader_(sheet);
+  const ids = {};
+  if (sheet.getLastRow() < 2) return ids;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues().forEach(function (r) {
+    if (String(r[header.indexOf('deleted')]) === '1') return;
+    ids[String(r[header.indexOf('name')]).trim()] = String(r[header.indexOf('id')]);
+  });
+  return ids;
+}
+
+/** Pairs UA and GCS answers and turns them into daily_checks_fb3 rows. */
+function buildImportedChecks_(ua, gcs, aircraftIds) {
+  const updatedAt = '2026-10-29T00:00:00.000Z';
+  const aircraft = [];
+  const droneId = function (name) {
+    if (!aircraftIds[name]) {
+      aircraftIds[name] = 'import-aircraft-' + name;
+      aircraft.push({ id: aircraftIds[name], updated_at: updatedAt, deleted: 0, name: name, active: 1 });
+    }
+    return aircraftIds[name];
+  };
+  const used = {};
+  const checks = [];
+  const add = function (u, g) {
+    const first = u || g;
+    const row = {
+      id: 'import-' + first.drone + '-' + first.at.replace(/\D/g, ''),
+      updated_at: updatedAt,
+      deleted: 0,
+      checked_at: first.at,
+      aircraft_id: droneId(first.drone),
+      pilot_id: '',
+    };
+    const notes = ['Imported from the old Google Form'];
+    if (u) OLD_UA_COLUMNS.forEach(function (c) { row[c] = oldValue_(u[c]); });
+    if (g) {
+      OLD_GCS_COLUMNS.forEach(function (c) {
+        if (c !== 'ground_control_station') row[c] = oldValue_(g[c]);
+      });
+      // The old form's first GCS question was the GCS in general, not only
+      // External RF: keep Ok / Not used there, anything else as a note.
+      const general = oldValue_(g.ground_control_station);
+      if (general === 'Ok' || general === 'Not used' || general === '') {
+        row.external_rf = general;
+      } else {
+        notes.push('GCS: ' + general);
+      }
+    }
+    row.notes = notes.join('. ');
+    checks.push(row);
+  };
+  ua.forEach(function (u) {
+    const day = u.at.slice(0, 10);
+    let best = -1;
+    gcs.forEach(function (g, i) {
+      if (used[i] || g.drone !== u.drone || g.at.slice(0, 10) !== day) return;
+      if (best < 0 || Math.abs(timeOf_(g.at) - timeOf_(u.at)) < Math.abs(timeOf_(gcs[best].at) - timeOf_(u.at))) best = i;
+    });
+    if (best >= 0) used[best] = true;
+    add(u, best >= 0 ? gcs[best] : null);
+  });
+  gcs.forEach(function (g, i) { if (!used[i]) add(null, g); });
+  return { checks: checks, aircraft: aircraft };
+}
+
+/** Seconds since midnight of "yyyy-MM-dd HH:mm:ss". */
+function timeOf_(at) {
+  const t = at.slice(11).split(':').map(Number);
+  return t[0] * 3600 + t[1] * 60 + t[2];
+}
+
 // ----------------------------------------------------------------- photos
 
 /** Saves a base64 photo to Drive and returns its id and link. */
