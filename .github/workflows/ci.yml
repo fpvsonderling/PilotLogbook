@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apps Script tests
+        run: node --test 'apps_script/test/*.test.js'
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze
+      - name: Flutter tests
+        working-directory: app
+        run: flutter test
+
+  windows:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - name: Build Windows app
+        working-directory: app
+        run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PilotLogbook-windows
+          path: app/build/windows/x64/runner/Release/

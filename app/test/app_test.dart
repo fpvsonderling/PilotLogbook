@@ -1,0 +1,79 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pilot_logbook/data/local_db.dart';
+import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/main.dart';
+
+void main() {
+  testWidgets('a pilot adds a cargo flight and sees it in the log', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    db.save(Tables.projects, {'name': 'Tjaereborg Enge', 'active': 1});
+    db.save(Tables.aircraft, {'name': '18', 'active': 1});
+    db.save(Tables.people, {
+      'name': 'Pavlo Yavorskyi',
+      'roles': 'pilot',
+      'active': 1,
+    });
+    db.save(Tables.missionTypes, {'name': 'Fiona Pickup', 'active': 1});
+
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    expect(find.text('No flights yet'), findsOneWidget);
+
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tjaereborg Enge'));
+    await tester.tap(find.text('18'));
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Take off'),
+      '13:00:00',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Land'),
+      '13:03:30',
+    );
+    await tester.enterText(find.widgetWithText(TextFormField, 'Batt %'), '45');
+    await tester.enterText(find.widgetWithText(TextFormField, 'What'), 'Fio');
+    await tester.pumpAndSettle();
+    // Pick the suggestion, which also closes the suggestion list.
+    await tester.tap(find.text('Fiona Pickup').last);
+    await tester.pumpAndSettle();
+    final rp = find.widgetWithText(DropdownButtonFormField<String?>, 'RP');
+    await tester.ensureVisible(rp);
+    await tester.pumpAndSettle();
+    await tester.tap(rp);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pavlo Yavorskyi').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('save-flight')));
+    await tester.pumpAndSettle();
+
+    final flight = db.rows(Tables.flights).single;
+    expect(flight['mission'], 'Fiona Pickup');
+    expect(flight['kind'], 'cargo');
+    expect(flight['duration_s'], 210);
+    expect(flight['battery_pct'], 45);
+    expect(find.text('0:03:30'), findsOneWidget);
+    expect(find.text('Cargo LogBook · 1 flights'), findsOneWidget);
+  });
+
+  testWidgets('saving an empty form shows what is missing', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('save-flight')));
+    await tester.pumpAndSettle();
+    expect(find.text('Required'), findsWidgets);
+    expect(db.rows(Tables.flights), isEmpty);
+  });
+}
