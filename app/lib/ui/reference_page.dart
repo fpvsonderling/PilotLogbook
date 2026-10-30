@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/local_db.dart';
 import '../data/schema.dart';
@@ -51,7 +52,8 @@ class _ReferenceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final db = Services.of(context).db;
+    final services = Services.of(context);
+    final db = services.db;
     return Scaffold(
       floatingActionButton: FloatingActionButton.small(
         tooltip: 'Add',
@@ -76,7 +78,7 @@ class _ReferenceList extends StatelessWidget {
                     ].join(' · '),
                   ),
                   trailing: r['active'] == 0 ? const Text('inactive') : null,
-                  onTap: () => _edit(context, r),
+                  onTap: services.canChange(r) ? () => _edit(context, r) : null,
                 ),
             ],
           );
@@ -94,7 +96,7 @@ class _ReferenceList extends StatelessWidget {
         if (c.type == ColType.text && c.name != 'roles')
           c.name: TextEditingController(text: values[c.name] as String?),
     };
-    final saved = await showDialog<bool>(
+    final action = await showDialog<_Action>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
@@ -148,12 +150,28 @@ class _ReferenceList extends StatelessWidget {
               ),
             ),
             actions: [
+              if (row != null && table == Tables.people && services.isAdmin)
+                TextButton(
+                  key: const Key('person-link'),
+                  onPressed: () => _showPersonLink(context, row),
+                  child: const Text('Personal link'),
+                ),
+              if (row != null && services.canChange(row))
+                TextButton(
+                  key: const Key('delete-reference'),
+                  onPressed: () async {
+                    if (await _confirmDelete(context, row) && context.mounted) {
+                      Navigator.pop(context, _Action.delete);
+                    }
+                  },
+                  child: const Text('Delete'),
+                ),
               TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(context, _Action.save),
                 child: const Text('Save'),
               ),
             ],
@@ -161,15 +179,84 @@ class _ReferenceList extends StatelessWidget {
         },
       ),
     );
-    if (saved == true && controllers['name']!.text.trim().isNotEmpty) {
+    if (action == _Action.save && controllers['name']!.text.trim().isNotEmpty) {
       services.db.save(table, {
         ...values,
         for (final e in controllers.entries) e.key: e.value.text.trim(),
       });
+      services.sync.sync();
+    } else if (action == _Action.delete) {
+      services.db.delete(table, row!['id'] as String);
       services.sync.sync();
     }
     for (final c in controllers.values) {
       c.dispose();
     }
   }
+}
+
+enum _Action { save, delete }
+
+Future<bool> _confirmDelete(BuildContext context, DbRow row) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+          'Delete ${row['name']}? It disappears from this list and from the '
+          'pickers; old flights and checks keep showing the name.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    ) ==
+    true;
+
+/// The admin gets a person's own link: with it in Settings, that person can
+/// change and delete the flights and checks they added.
+Future<void> _showPersonLink(BuildContext context, DbRow person) async {
+  final sync = Services.of(context).sync;
+  String text;
+  try {
+    text = await sync.personLink(person['id'] as String);
+    await Clipboard.setData(ClipboardData(text: text));
+  } catch (e) {
+    text = 'Could not make the link: $e';
+  }
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('Link for ${person['name']}'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Copied. Send it only to this person: they paste it in '
+              'Settings and can then change and delete their own entries.',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(text, key: const Key('person-link-text')),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 }

@@ -23,6 +23,7 @@ class DailyChecksPage extends StatelessWidget {
           final checks = logbook.dailyChecks();
           final aircraft = logbook.names(Tables.aircraft);
           final people = logbook.names(Tables.people);
+          final services = Services.of(context);
           final theme = Theme.of(context);
           final colors = CheckColors.of(context);
           if (checks.isEmpty) {
@@ -49,7 +50,9 @@ class DailyChecksPage extends StatelessWidget {
                   return Card(
                     clipBehavior: Clip.antiAlias,
                     child: InkWell(
-                      onTap: () => openDailyCheck(context, check: c),
+                      onTap: services.canChange(c.row)
+                          ? () => openDailyCheck(context, check: c)
+                          : null,
                       child: Padding(
                         padding: const EdgeInsets.all(14),
                         child: Column(

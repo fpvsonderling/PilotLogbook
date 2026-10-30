@@ -23,6 +23,10 @@ class LocalDb {
   /// Fires after every write, local or from sync, so screens can reload.
   final changes = DbChanges();
 
+  /// Settings key of the people id of this device's own link (see
+  /// SyncService.me); new rows are marked as theirs.
+  static const meKey = 'me';
+
   /// Overridable clock, for tests.
   DateTime Function() now = () => DateTime.now().toUtc();
 
@@ -112,6 +116,7 @@ class LocalDb {
       'id': id,
       'updated_at': now().toIso8601String(),
       'server_seq': existing?['server_seq'],
+      'created_by': existing == null ? setting(meKey) : existing['created_by'],
       'deleted': 0,
       'dirty': 1,
     };
@@ -155,6 +160,17 @@ class LocalDb {
       'WHERE id = ? AND updated_at = ?',
       [serverSeq, id, updatedAt],
     );
+  }
+
+  /// Forgets an upload the spreadsheet refused. A row it has is replaced by
+  /// its version from the same answer; a row it never had is removed.
+  void dropLocalChange(TableDef table, String id) {
+    _db.execute(
+      'DELETE FROM ${table.name} WHERE id = ? AND dirty = 1 '
+      'AND server_seq IS NULL',
+      [id],
+    );
+    _db.execute('UPDATE ${table.name} SET dirty = 0 WHERE id = ?', [id]);
   }
 
   /// Applies a row pulled from the spreadsheet. The newer updated_at wins; a

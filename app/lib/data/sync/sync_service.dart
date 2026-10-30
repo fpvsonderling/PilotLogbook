@@ -85,8 +85,36 @@ class SyncService extends ChangeNotifier {
 
   static const urlKey = 'script_url';
   static const tokenKey = 'script_token';
+  static const adminKey = 'is_admin';
 
   String? get url => db.setting(urlKey);
+
+  /// True when the link is the admin link: the script then accepts changes
+  /// and deletes of every row, and the app shows those controls. Known after
+  /// the first sync with the link.
+  bool get isAdmin => db.setting(adminKey) == '1';
+
+  /// People id when the link is a person's own link, else null.
+  String? get me {
+    final id = db.setting(LocalDb.meKey);
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  /// Whether this device may change or delete [row]: the admin any row,
+  /// a person with their own link the rows they added.
+  bool canChange(DbRow row) =>
+      isAdmin || (me != null && row['created_by'] == me);
+
+  /// The admin makes a person's own link, to send to them.
+  Future<String> personLink(String personId) async {
+    final answer = await transportFactory(url!)({
+      'action': 'personLink',
+      'token': token,
+      'person_id': personId,
+    });
+    return '$url?key=${answer['token']}';
+  }
+
   String? get token => db.setting(tokenKey);
   bool get configured => (url ?? '').isNotEmpty && (token ?? '').isNotEmpty;
 
@@ -103,6 +131,10 @@ class SyncService extends ChangeNotifier {
         .first
         .replaceFirst(RegExp(r'/dev$'), '/exec');
     db.setSetting(urlKey, url);
+    if (key != token) {
+      db.setSetting(adminKey, null);
+      db.setSetting(LocalDb.meKey, null);
+    }
     db.setSetting(tokenKey, key);
     notifyListeners();
     return true;
@@ -152,8 +184,17 @@ class SyncService extends ChangeNotifier {
     final accepted = (answer['accepted'] as Map?) ?? const {};
     final rows = (answer['pulled'] as Map?) ?? const {};
     final seqs = (answer['seq'] as Map?) ?? const {};
+    final denied = (answer['denied'] as Map?) ?? const {};
     db.transaction(() {
+      db.setSetting(adminKey, answer['admin'] == true ? '1' : '0');
+      final me = answer['me'];
+      db.setSetting(LocalDb.meKey, me is String && me.isNotEmpty ? me : null);
       for (final t in Tables.all) {
+        // Edits the script refused (not the admin link): drop them, the
+        // spreadsheet's version comes back in pulled.
+        for (final id in (denied[t.name] as List?) ?? const []) {
+          db.dropLocalChange(t, id as String);
+        }
         for (final a in (accepted[t.name] as List?) ?? const []) {
           final m = a as Map;
           db.markSynced(

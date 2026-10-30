@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/data/sync/sync_service.dart';
 import 'package:pilot_logbook/main.dart';
 
 void main() {
@@ -61,6 +62,40 @@ void main() {
     expect(flight['battery_id'], battery);
     expect(find.text('0:03:30'), findsOneWidget);
     expect(find.text('Cargo LogBook · 1 flights'), findsOneWidget);
+  });
+
+  testWidgets('only an admin can open and delete saved reference data', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    db.save(Tables.aircraft, {'name': '24', 'active': 1});
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.tap(find.text('Reference data'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Drones'));
+    await tester.pumpAndSettle();
+
+    // A pilot: tapping does nothing, there is nothing to delete.
+    await tester.tap(find.text('24'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit'), findsNothing);
+
+    db.setSetting(SyncService.adminKey, '1');
+    db.changes.notify();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('24'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('delete-reference')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(db.rows(Tables.aircraft), isEmpty);
+    expect(find.text('Nothing here yet'), findsOneWidget);
   });
 
   testWidgets('saving an empty form shows what is missing', (tester) async {

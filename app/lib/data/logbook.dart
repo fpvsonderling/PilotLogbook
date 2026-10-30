@@ -63,13 +63,20 @@ class Logbook {
   Logbook(this.db);
   final LocalDb db;
 
-  /// Active rows of a reference table as id -> name, sorted by name.
+  /// A reference table as id -> name, sorted by name. [activeOnly] gives
+  /// the pickers' list; otherwise deleted rows are in too, so old flights
+  /// and checks keep showing a deleted drone's or person's name.
   Map<String, String> names(TableDef table, {bool activeOnly = false}) => {
-    for (final r in db.rows(
-      table,
-      where: activeOnly ? 'COALESCE(active, 1) = 1' : null,
-      orderBy: 'name COLLATE NOCASE',
-    ))
+    for (final r
+        in activeOnly
+            ? db.rows(
+                table,
+                where: 'COALESCE(active, 1) = 1',
+                orderBy: 'name COLLATE NOCASE',
+              )
+            : db.select(
+                'SELECT id, name FROM ${table.name} ORDER BY name COLLATE NOCASE',
+              ))
       r['id'] as String: (r['name'] as String?) ?? '',
   };
 

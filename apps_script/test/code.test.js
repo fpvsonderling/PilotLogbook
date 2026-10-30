@@ -57,6 +57,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const sheets = {};
   const props = {};
   const files = [];
+  let uuid = 0;
   if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
   const oldSheets = {};
   const spreadsheet = {
@@ -96,7 +97,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       },
     },
     Utilities: {
-      getUuid: () => 'token-1',
+      getUuid: () => 'token-' + ++uuid,
       formatDate: () => '2026-11',
       base64Decode: (s) => s,
       newBlob: (data, type, name) => ({ data, type, name }),
@@ -114,9 +115,10 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8'), ctx);
   ctx.setup();
-  const post = (body) =>
-    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'token-1', ...body }) } }).text);
-  return { ctx, sheets, props, files, post, oldSheets };
+  const send = (token) => (body) =>
+    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token, ...body }) } }).text);
+  // token-1 is the pilots' link, token-2 the admin link.
+  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -132,7 +134,7 @@ const flight = (id, updatedAt, extra = {}) => ({
 test('setup creates one tab per table with headers', () => {
   const { sheets } = load();
   assert.ok(sheets.flights);
-  assert.deepStrictEqual(sheets.flights.cells[0].slice(0, 5), ['id', 'updated_at', 'server_seq', 'deleted', 'date']);
+  assert.deepStrictEqual(sheets.flights.cells[0].slice(0, 5), ['id', 'updated_at', 'server_seq', 'deleted', 'created_by']);
 });
 
 test('rejects a wrong token', () => {
@@ -204,6 +206,68 @@ test('setup in a fresh standalone script creates the spreadsheet', () => {
   const { sheets, props } = load({ standalone: true, fresh: true });
   assert.strictEqual(props.SPREADSHEET_ID, 'ss1');
   assert.ok(sheets.flights);
+});
+
+test('a pilot adds rows but cannot change or delete them', () => {
+  const { post, pilot, sheets } = load();
+  const added = pilot({ action: 'sync', push: { flights: [flight('a', 't1', { notes: 'x' })] }, since: {} });
+  assert.strictEqual(added.admin, false);
+  assert.strictEqual(added.accepted.flights.length, 1);
+  // The same version again (answer lost on the way) is fine.
+  const retry = pilot({ action: 'sync', push: { flights: [flight('a', 't1', { notes: 'x' })] }, since: { flights: 1 } });
+  assert.deepStrictEqual(retry.denied.flights, []);
+  const edit = pilot({
+    action: 'sync',
+    push: { flights: [flight('a', 't2', { notes: 'y' }), flight('b', 't2', { deleted: 1 })] },
+    since: { flights: 2 },
+  });
+  assert.deepStrictEqual(edit.accepted.flights, []);
+  assert.deepStrictEqual(edit.denied.flights, ['a', 'b']);
+  assert.strictEqual(edit.pulled.flights[0].notes, 'x');
+  const header = sheets.flights.cells[0];
+  assert.strictEqual(sheets.flights.cells.length, 2);
+  assert.strictEqual(sheets.flights.cells[1][header.indexOf('notes')], 'x');
+  // The admin link may.
+  const admin = post({ action: 'sync', push: { flights: [flight('a', 't3', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(admin.admin, true);
+  assert.strictEqual(admin.accepted.flights.length, 1);
+  assert.strictEqual(sheets.flights.cells[1][header.indexOf('deleted')], '1');
+});
+
+test('a person\'s own link changes and deletes only that person\'s rows', () => {
+  const { post, sheets, ctx } = load();
+  const link = post({ action: 'personLink', person_id: 'p-anna' });
+  assert.strictEqual(link.ok, true);
+  // Asking again gives the same link.
+  assert.strictEqual(post({ action: 'personLink', person_id: 'p-anna' }).token, link.token);
+  const anna = (body) =>
+    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: link.token, ...body }) } }).text);
+  // Pilots cannot make links.
+  assert.strictEqual(anna({ action: 'personLink', person_id: 'p-anna' }).ok, false);
+
+  // The device cannot claim someone else's row.
+  const added = anna({ action: 'sync', push: { flights: [flight('a', 't1', { created_by: 'p-bob' })] }, since: {} });
+  assert.strictEqual(added.me, 'p-anna');
+  assert.strictEqual(added.pulled.flights[0].created_by, 'p-anna');
+  post({ action: 'sync', push: { flights: [flight('b', 't1', { created_by: 'p-bob' })] }, since: {} });
+
+  const out = anna({
+    action: 'sync',
+    push: { flights: [flight('a', 't2', { notes: 'mine' }), flight('b', 't2', { deleted: 1 })] },
+    since: { flights: 2 },
+  });
+  assert.deepStrictEqual(out.accepted.flights.map((r) => r.id), ['a']);
+  assert.deepStrictEqual(out.denied.flights, ['b']);
+  const h = sheets.flights.cells[0];
+  const row = (id) => sheets.flights.cells.find((r) => r[0] === id);
+  assert.strictEqual(row('a')[h.indexOf('notes')], 'mine');
+  assert.strictEqual(row('a')[h.indexOf('created_by')], 'p-anna');
+  assert.strictEqual(row('b')[h.indexOf('deleted')], '0');
+  assert.strictEqual(row('b')[h.indexOf('created_by')], 'p-bob');
+
+  // Her own row she can delete.
+  anna({ action: 'sync', push: { flights: [flight('a', 't3', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(row('a')[h.indexOf('deleted')], '1');
 });
 
 test('connectionLink gives the web app URL with the access token', () => {

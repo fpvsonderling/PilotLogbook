@@ -48,6 +48,7 @@ class FlightsPage extends StatelessWidget {
           final aircraft = logbook.names(Tables.aircraft);
           final batteries = logbook.names(Tables.batteries);
           final people = logbook.names(Tables.people);
+          final services = Services.of(context);
           final days = <String, List<DbRow>>{};
           for (final f in flights) {
             days.putIfAbsent(f['date'] as String? ?? '', () => []).add(f);
@@ -92,11 +93,13 @@ class FlightsPage extends StatelessWidget {
                                 ),
                                 for (final f in day.value)
                                   InkWell(
-                                    onTap: () => showFlightForm(
-                                      context,
-                                      kind: kind,
-                                      flight: f,
-                                    ),
+                                    onTap: services.canChange(f)
+                                        ? () => showFlightForm(
+                                            context,
+                                            kind: kind,
+                                            flight: f,
+                                          )
+                                        : null,
                                     child: _row([
                                       f['date'] as String? ?? '',
                                       projects[f['project_id']] ?? '',
