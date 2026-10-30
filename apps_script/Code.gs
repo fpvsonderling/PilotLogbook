@@ -8,6 +8,8 @@
  *   last server_seq it has seen. The script writes the rows (newer
  *   updated_at wins) and answers with every row changed since.
  * - monthlyBackup() copies the spreadsheet to a Drive folder on the 1st.
+ * - Two links: the pilots' link can only add new rows; the admin link can
+ *   also change and delete rows that are already in the spreadsheet.
  *
  * Setup: run setup(), then Deploy > New deployment > Web app (execute as
  * "Me", access "Anyone"), then run connectionLink(). See README.md.
@@ -55,6 +57,7 @@ function setup() {
   if (!props.getProperty('API_TOKEN')) {
     props.setProperty('API_TOKEN', Utilities.getUuid());
   }
+  adminToken_();
   if (!props.getProperty('SEQ')) props.setProperty('SEQ', '0');
   installTriggers();
   Logger.log('Done. Spreadsheet: ' + spreadsheet_().getUrl());
@@ -62,8 +65,9 @@ function setup() {
 }
 
 /**
- * Step 2, after Deploy > New deployment > Web app: prints the one link to
- * paste into the app's Settings (web app URL with the access token).
+ * Step 2, after Deploy > New deployment > Web app: prints the links to paste
+ * into the app's Settings (web app URL with the access token). Pilots get
+ * the first one; only administrators get the admin link.
  */
 function connectionLink() {
   const url = ScriptApp.getService().getUrl();
@@ -73,11 +77,24 @@ function connectionLink() {
   }
   // Run from the editor, getUrl() gives the owner-only /dev URL; the app
   // needs the deployed /exec one, which has the same id.
-  const link = url.replace(/\/dev$/, '/exec') + '?key=' +
-    PropertiesService.getScriptProperties().getProperty('API_TOKEN');
-  Logger.log('Paste this into the app (Settings > Connection link):');
+  const base = url.replace(/\/dev$/, '/exec') + '?key=';
+  const link = base + PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  Logger.log('Link for pilots (Settings > Connection link):');
   Logger.log(link);
+  Logger.log('Link for administrators only (can change and delete data):');
+  Logger.log(base + adminToken_());
   return link;
+}
+
+/** The admin link's token, made on first use (also for older setups). */
+function adminToken_() {
+  const props = PropertiesService.getScriptProperties();
+  let token = props.getProperty('ADMIN_TOKEN');
+  if (!token) {
+    token = Utilities.getUuid();
+    props.setProperty('ADMIN_TOKEN', token);
+  }
+  return token;
 }
 
 /** Monthly backup on the 1st at about 03:00 (the spreadsheet's time zone). */
@@ -140,9 +157,12 @@ function doGet() {
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
-    const token = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
-    if (!token || req.token !== token) return json_({ ok: false, error: 'Wrong access token' });
-    if (req.action === 'sync') return json_(sync_(req));
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('API_TOKEN');
+    const adminToken = props.getProperty('ADMIN_TOKEN');
+    const admin = !!adminToken && req.token === adminToken;
+    if (!admin && (!token || req.token !== token)) return json_({ ok: false, error: 'Wrong access token' });
+    if (req.action === 'sync') return json_(sync_(req, admin));
     if (req.action === 'uploadPhoto') return json_(uploadPhoto_(req));
     return json_({ ok: false, error: 'Unknown action ' + req.action });
   } catch (err) {
@@ -156,7 +176,13 @@ function json_(obj) {
 
 // ------------------------------------------------------------------- sync
 
-function sync_(req) {
+/**
+ * Without [admin], rows already in the spreadsheet are not changed or
+ * deleted: they are listed in `denied` and sent back as they are, so the
+ * device drops its edit. Sending the same version again (a retry after a
+ * lost answer) is fine.
+ */
+function sync_(req, admin) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -167,6 +193,7 @@ function sync_(req) {
     const accepted = {};
     const pulled = {};
     const maxSeq = {};
+    const denied = {};
 
     Object.keys(SCHEMA).forEach(function (table) {
       const incoming = push[table] || [];
@@ -185,9 +212,17 @@ function sync_(req) {
       const changed = {};
       const rejected = [];
       accepted[table] = [];
+      denied[table] = [];
       incoming.forEach(function (row) {
         if (!row.id) return;
         const at = rowById[row.id];
+        if (!admin && (at !== undefined
+          ? text_(values[at][col.updated_at]) !== String(row.updated_at)
+          : String(row.deleted) === '1')) {
+          if (at !== undefined) rejected.push(at);
+          denied[table].push(row.id);
+          return;
+        }
         if (at !== undefined && text_(values[at][col.updated_at]) > String(row.updated_at)) {
           rejected.push(at);
           return;
@@ -225,7 +260,7 @@ function sync_(req) {
     });
 
     props.setProperty('SEQ', String(seq));
-    return { ok: true, accepted: accepted, pulled: pulled, seq: maxSeq };
+    return { ok: true, admin: !!admin, accepted: accepted, denied: denied, pulled: pulled, seq: maxSeq };
   } finally {
     lock.releaseLock();
   }
@@ -282,7 +317,7 @@ function importOldDailyChecks() {
   const ua = readOldChecks_(OLD_UA_CHECKS, OLD_UA_COLUMNS);
   const gcs = readOldChecks_(OLD_GCS_CHECKS, OLD_GCS_COLUMNS);
   const out = buildImportedChecks_(ua, gcs, aircraftIds_());
-  const res = sync_({ push: { aircraft: out.aircraft, daily_checks_fb3: out.checks }, since: {} });
+  const res = sync_({ push: { aircraft: out.aircraft, daily_checks_fb3: out.checks }, since: {} }, true);
   Logger.log('Imported ' + res.accepted.daily_checks_fb3.length + ' daily checks (' +
     ua.length + ' UA and ' + gcs.length + ' GCS answers), ' + out.aircraft.length + ' new drones.');
   return res.accepted.daily_checks_fb3.length;

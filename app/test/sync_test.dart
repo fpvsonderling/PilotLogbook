@@ -4,7 +4,8 @@ import 'package:pilot_logbook/data/schema.dart';
 import 'package:pilot_logbook/data/sync/sync_service.dart';
 
 /// In-memory stand-in for the spreadsheet script, with the same contract as
-/// apps_script/Code.gs (that file has its own tests).
+/// apps_script/Code.gs (that file has its own tests). Token 'secret' is the
+/// pilots' link, 'admin-secret' the admin link.
 class FakeSheets implements SyncTransport {
   final tables = <String, Map<String, Map<String, Object?>>>{};
   var seq = 0;
@@ -13,19 +14,32 @@ class FakeSheets implements SyncTransport {
   @override
   Future<Map<String, Object?>> call(Map<String, Object?> body) async {
     calls++;
-    if (body['token'] != 'secret') throw SyncException('Wrong access token');
+    final admin = body['token'] == 'admin-secret';
+    if (!admin && body['token'] != 'secret') {
+      throw SyncException('Wrong access token');
+    }
     final push = body['push'] as Map<String, List<DbRow>>;
     final since = body['since'] as Map<String, int>;
     final accepted = <String, List<Object?>>{};
     final pulled = <String, List<Object?>>{};
     final seqs = <String, int>{};
+    final denied = <String, List<Object?>>{};
     for (final t in Tables.all) {
       final rows = tables.putIfAbsent(t.name, () => {});
       final ok = accepted[t.name] = [];
       final rejected = <String>{};
+      final no = denied[t.name] = [];
       for (final r in push[t.name] ?? const <DbRow>[]) {
         final id = r['id'] as String;
         final existing = rows[id];
+        if (!admin &&
+            (existing != null
+                ? existing['updated_at'] != r['updated_at']
+                : r['deleted'] == 1)) {
+          if (existing != null) rejected.add(id);
+          no.add(id);
+          continue;
+        }
         if (existing != null &&
             (existing['updated_at'] as String).compareTo(
                   r['updated_at'] as String,
@@ -55,14 +69,21 @@ class FakeSheets implements SyncTransport {
             : m,
       );
     }
-    return {'ok': true, 'accepted': accepted, 'pulled': pulled, 'seq': seqs};
+    return {
+      'ok': true,
+      'admin': admin,
+      'accepted': accepted,
+      'denied': denied,
+      'pulled': pulled,
+      'seq': seqs,
+    };
   }
 }
 
-SyncService device(FakeSheets sheets) {
+SyncService device(FakeSheets sheets, {bool admin = false}) {
   final db = LocalDb.inMemory();
   db.setSetting(SyncService.urlKey, 'https://example.test/exec');
-  db.setSetting(SyncService.tokenKey, 'secret');
+  db.setSetting(SyncService.tokenKey, admin ? 'admin-secret' : 'secret');
   return SyncService(db)..transportFactory = (_) => sheets;
 }
 
@@ -70,7 +91,7 @@ void main() {
   test('two devices see each other\'s flights after syncing', () async {
     final sheets = FakeSheets();
     final laptop = device(sheets);
-    final phone = device(sheets);
+    final phone = device(sheets, admin: true);
 
     final id = laptop.db.save(Tables.flights, {
       'date': '2026-10-28',
@@ -88,6 +109,33 @@ void main() {
     await phone.sync();
     await laptop.sync();
     expect(laptop.db.byId(Tables.flights, id)!['notes'], 'Strong wind');
+  });
+
+  test('only the admin link may change and delete saved rows', () async {
+    final sheets = FakeSheets();
+    final pilot = device(sheets);
+    final admin = device(sheets, admin: true);
+    final id = pilot.db.save(Tables.flights, {'notes': 'first'});
+    await pilot.sync();
+    expect(pilot.isAdmin, isFalse);
+
+    // An edit and a delete from the pilots' link are undone.
+    pilot.db.save(Tables.flights, {'id': id, 'notes': 'changed'});
+    final other = pilot.db.save(Tables.flights, {'notes': 'never sent'});
+    pilot.db.delete(Tables.flights, other);
+    await pilot.sync();
+    expect(pilot.pendingCount, 0);
+    expect(pilot.db.byId(Tables.flights, id)!['notes'], 'first');
+    expect(pilot.db.byId(Tables.flights, other), isNull);
+    expect(sheets.tables['flights']![id]!['notes'], 'first');
+    expect(sheets.tables['flights']!.containsKey(other), isFalse);
+
+    await admin.sync();
+    expect(admin.isAdmin, isTrue);
+    admin.db.delete(Tables.flights, id);
+    await admin.sync();
+    await pilot.sync();
+    expect(pilot.db.rows(Tables.flights), isEmpty);
   });
 
   test('a later sync only downloads what changed', () async {

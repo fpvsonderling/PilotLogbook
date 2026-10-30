@@ -57,6 +57,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const sheets = {};
   const props = {};
   const files = [];
+  let uuid = 0;
   if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
   const oldSheets = {};
   const spreadsheet = {
@@ -96,7 +97,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       },
     },
     Utilities: {
-      getUuid: () => 'token-1',
+      getUuid: () => 'token-' + ++uuid,
       formatDate: () => '2026-11',
       base64Decode: (s) => s,
       newBlob: (data, type, name) => ({ data, type, name }),
@@ -114,9 +115,10 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8'), ctx);
   ctx.setup();
-  const post = (body) =>
-    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: 'token-1', ...body }) } }).text);
-  return { ctx, sheets, props, files, post, oldSheets };
+  const send = (token) => (body) =>
+    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token, ...body }) } }).text);
+  // token-1 is the pilots' link, token-2 the admin link.
+  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -204,6 +206,32 @@ test('setup in a fresh standalone script creates the spreadsheet', () => {
   const { sheets, props } = load({ standalone: true, fresh: true });
   assert.strictEqual(props.SPREADSHEET_ID, 'ss1');
   assert.ok(sheets.flights);
+});
+
+test('a pilot adds rows but cannot change or delete them', () => {
+  const { post, pilot, sheets } = load();
+  const added = pilot({ action: 'sync', push: { flights: [flight('a', 't1', { notes: 'x' })] }, since: {} });
+  assert.strictEqual(added.admin, false);
+  assert.strictEqual(added.accepted.flights.length, 1);
+  // The same version again (answer lost on the way) is fine.
+  const retry = pilot({ action: 'sync', push: { flights: [flight('a', 't1', { notes: 'x' })] }, since: { flights: 1 } });
+  assert.deepStrictEqual(retry.denied.flights, []);
+  const edit = pilot({
+    action: 'sync',
+    push: { flights: [flight('a', 't2', { notes: 'y' }), flight('b', 't2', { deleted: 1 })] },
+    since: { flights: 2 },
+  });
+  assert.deepStrictEqual(edit.accepted.flights, []);
+  assert.deepStrictEqual(edit.denied.flights, ['a', 'b']);
+  assert.strictEqual(edit.pulled.flights[0].notes, 'x');
+  const header = sheets.flights.cells[0];
+  assert.strictEqual(sheets.flights.cells.length, 2);
+  assert.strictEqual(sheets.flights.cells[1][header.indexOf('notes')], 'x');
+  // The admin link may.
+  const admin = post({ action: 'sync', push: { flights: [flight('a', 't3', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(admin.admin, true);
+  assert.strictEqual(admin.accepted.flights.length, 1);
+  assert.strictEqual(sheets.flights.cells[1][header.indexOf('deleted')], '1');
 });
 
 test('connectionLink gives the web app URL with the access token', () => {

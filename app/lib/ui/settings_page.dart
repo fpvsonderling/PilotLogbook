@@ -88,12 +88,25 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: 16),
         ListenableBuilder(
           listenable: sync,
-          builder: (context, _) => Text(
-            sync.lastError != null
-                ? 'Last error: ${sync.lastError}'
-                : sync.lastSyncedAt != null
-                ? 'Last sync: ${sync.lastSyncedAt}'
-                : 'Not synced yet in this session',
+          builder: (context, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                sync.lastError != null
+                    ? 'Last error: ${sync.lastError}'
+                    : sync.lastSyncedAt != null
+                    ? 'Last sync: ${sync.lastSyncedAt}'
+                    : 'Not synced yet in this session',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                key: const Key('access-level'),
+                sync.isAdmin
+                    ? 'Access: administrator (can change and delete data)'
+                    : 'Access: pilot (can add data; changes and deletes '
+                          'are for the admin link)',
+              ),
+            ],
           ),
         ),
       ],

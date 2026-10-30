@@ -51,7 +51,8 @@ class _ReferenceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final db = Services.of(context).db;
+    final services = Services.of(context);
+    final db = services.db;
     return Scaffold(
       floatingActionButton: FloatingActionButton.small(
         tooltip: 'Add',
@@ -76,7 +77,7 @@ class _ReferenceList extends StatelessWidget {
                     ].join(' · '),
                   ),
                   trailing: r['active'] == 0 ? const Text('inactive') : null,
-                  onTap: () => _edit(context, r),
+                  onTap: services.isAdmin ? () => _edit(context, r) : null,
                 ),
             ],
           );
@@ -94,7 +95,7 @@ class _ReferenceList extends StatelessWidget {
         if (c.type == ColType.text && c.name != 'roles')
           c.name: TextEditingController(text: values[c.name] as String?),
     };
-    final saved = await showDialog<bool>(
+    final action = await showDialog<_Action>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
@@ -148,12 +149,22 @@ class _ReferenceList extends StatelessWidget {
               ),
             ),
             actions: [
+              if (row != null && services.isAdmin)
+                TextButton(
+                  key: const Key('delete-reference'),
+                  onPressed: () async {
+                    if (await _confirmDelete(context, row) && context.mounted) {
+                      Navigator.pop(context, _Action.delete);
+                    }
+                  },
+                  child: const Text('Delete'),
+                ),
               TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(context, _Action.save),
                 child: const Text('Save'),
               ),
             ],
@@ -161,11 +172,14 @@ class _ReferenceList extends StatelessWidget {
         },
       ),
     );
-    if (saved == true && controllers['name']!.text.trim().isNotEmpty) {
+    if (action == _Action.save && controllers['name']!.text.trim().isNotEmpty) {
       services.db.save(table, {
         ...values,
         for (final e in controllers.entries) e.key: e.value.text.trim(),
       });
+      services.sync.sync();
+    } else if (action == _Action.delete) {
+      services.db.delete(table, row!['id'] as String);
       services.sync.sync();
     }
     for (final c in controllers.values) {
@@ -173,3 +187,28 @@ class _ReferenceList extends StatelessWidget {
     }
   }
 }
+
+enum _Action { save, delete }
+
+Future<bool> _confirmDelete(BuildContext context, DbRow row) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+          'Delete ${row['name']}? It disappears from this list and from the '
+          'pickers; old flights and checks keep showing the name.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    ) ==
+    true;

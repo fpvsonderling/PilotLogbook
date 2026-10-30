@@ -157,6 +157,17 @@ class LocalDb {
     );
   }
 
+  /// Forgets an upload the spreadsheet refused. A row it has is replaced by
+  /// its version from the same answer; a row it never had is removed.
+  void dropLocalChange(TableDef table, String id) {
+    _db.execute(
+      'DELETE FROM ${table.name} WHERE id = ? AND dirty = 1 '
+      'AND server_seq IS NULL',
+      [id],
+    );
+    _db.execute('UPDATE ${table.name} SET dirty = 0 WHERE id = ?', [id]);
+  }
+
   /// Applies a row pulled from the spreadsheet. The newer updated_at wins; a
   /// newer local edit stays and is uploaded on the next sync.
   void applyRemote(TableDef table, Map<String, Object?> remote) {
