@@ -12,21 +12,34 @@ Future<void> showFlightForm(
   DbRow? flight,
 }) => showDialog(
   context: context,
-  builder: (_) => Dialog(
-    alignment: Alignment.centerRight,
-    insetPadding: const EdgeInsets.all(16),
-    child: SizedBox(
-      width: 460,
-      child: FlightForm(kind: kind, flight: flight),
-    ),
-  ),
+  builder: (context) => MediaQuery.sizeOf(context).width < 600
+      // Phones: the whole screen, so the keyboard leaves room for the field.
+      ? Dialog.fullscreen(
+          child: FlightForm(kind: kind, flight: flight, compact: true),
+        )
+      : Dialog(
+          alignment: Alignment.centerRight,
+          insetPadding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: 460,
+            child: FlightForm(kind: kind, flight: flight),
+          ),
+        ),
 );
 
 class FlightForm extends StatefulWidget {
-  const FlightForm({super.key, required this.kind, this.flight});
+  const FlightForm({
+    super.key,
+    required this.kind,
+    this.flight,
+    this.compact = false,
+  });
 
   final String kind;
   final DbRow? flight;
+
+  /// Narrow screen: a close button instead of Cancel, to fit the title.
+  final bool compact;
 
   @override
   State<FlightForm> createState() => _FlightFormState();
@@ -121,6 +134,13 @@ class _FlightFormState extends State<FlightForm> {
         children: [
           AppBar(
             automaticallyImplyLeading: false,
+            leading: widget.compact
+                ? IconButton(
+                    tooltip: 'Cancel',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  )
+                : null,
             title: Text(widget.flight == null ? 'New flight' : 'Edit flight'),
             actions: [
               if (widget.flight != null &&
@@ -130,10 +150,11 @@ class _FlightFormState extends State<FlightForm> {
                   onPressed: _delete,
                   icon: const Icon(Icons.delete_outline),
                 ),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
+              if (!widget.compact)
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
               FilledButton(
                 key: const Key('save-flight'),
                 onPressed: _save,
