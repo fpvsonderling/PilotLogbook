@@ -107,3 +107,27 @@ jobs:
           make_latest: false
           files: app/PilotLogbook.apk
           body: Built from ${{ github.sha }} on ${{ github.ref_name }}.
+
+  ios:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      # Unsigned for now: installing on an iPhone needs an Apple signature
+      # (TestFlight with a developer account, or a sideloading tool that
+      # signs it with the user's own Apple ID).
+      - name: Build iOS app (unsigned)
+        working-directory: app
+        run: |
+          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry PilotLogbook-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PilotLogbook-ios-unsigned
+          path: app/PilotLogbook-unsigned.ipa
