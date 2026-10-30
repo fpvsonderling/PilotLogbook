@@ -317,7 +317,8 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
               : 'Drone $droneName · ${checklist!.name}',
         ),
         actions: [
-          if (widget.check != null && Services.of(context).isAdmin)
+          if (widget.check != null &&
+              Services.of(context).canChange(widget.check!.row))
             IconButton(
               tooltip: 'Delete',
               onPressed: _delete,

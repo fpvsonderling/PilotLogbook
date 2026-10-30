@@ -8,8 +8,9 @@
  *   last server_seq it has seen. The script writes the rows (newer
  *   updated_at wins) and answers with every row changed since.
  * - monthlyBackup() copies the spreadsheet to a Drive folder on the 1st.
- * - Two links: the pilots' link can only add new rows; the admin link can
- *   also change and delete rows that are already in the spreadsheet.
+ * - Links: the admin link can change and delete every row. A person's own
+ *   link (the admin makes it in the app, People > person) can change and
+ *   delete the rows that person added. The shared pilots' link only adds.
  *
  * Setup: run setup(), then Deploy > New deployment > Web app (execute as
  * "Me", access "Anyone"), then run connectionLink(). See README.md.
@@ -36,7 +37,7 @@ const SCHEMA = {
 };
 // SCHEMA-END
 
-const SYSTEM_COLUMNS = ['id', 'updated_at', 'server_seq', 'deleted'];
+const SYSTEM_COLUMNS = ['id', 'updated_at', 'server_seq', 'deleted', 'created_by'];
 const BACKUP_FOLDER = 'PilotLogbook Backups';
 const PHOTO_FOLDER = 'PilotLogbook Photos';
 
@@ -157,17 +158,48 @@ function doGet() {
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
-    const props = PropertiesService.getScriptProperties();
-    const token = props.getProperty('API_TOKEN');
-    const adminToken = props.getProperty('ADMIN_TOKEN');
-    const admin = !!adminToken && req.token === adminToken;
-    if (!admin && (!token || req.token !== token)) return json_({ ok: false, error: 'Wrong access token' });
-    if (req.action === 'sync') return json_(sync_(req, admin));
+    const user = user_(req.token);
+    if (!user) return json_({ ok: false, error: 'Wrong access token' });
+    if (req.action === 'sync') return json_(sync_(req, user));
+    if (req.action === 'personLink') {
+      if (!user.admin) return json_({ ok: false, error: 'Only the admin link can make links' });
+      return json_({ ok: true, token: personToken_(String(req.person_id || '')) });
+    }
     if (req.action === 'uploadPhoto') return json_(uploadPhoto_(req));
     return json_({ ok: false, error: 'Unknown action ' + req.action });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   }
+}
+
+/**
+ * Who a token belongs to: { admin, me } where me is a people id for a
+ * person's own link, '' otherwise; null for an unknown token.
+ */
+function user_(token) {
+  const props = PropertiesService.getScriptProperties();
+  if (!token) return null;
+  if (token === props.getProperty('ADMIN_TOKEN')) return { admin: true, me: '' };
+  if (token === props.getProperty('API_TOKEN')) return { admin: false, me: '' };
+  const me = personTokens_()[token];
+  return me ? { admin: false, me: me } : null;
+}
+
+/** Personal tokens as token -> people id, in the PERSON_TOKENS property. */
+function personTokens_() {
+  return JSON.parse(PropertiesService.getScriptProperties().getProperty('PERSON_TOKENS') || '{}');
+}
+
+/** The token of a person's own link, made on first use. */
+function personToken_(personId) {
+  if (!personId) throw new Error('No person');
+  const tokens = personTokens_();
+  const existing = Object.keys(tokens).filter(function (t) { return tokens[t] === personId; })[0];
+  if (existing) return existing;
+  const token = Utilities.getUuid();
+  tokens[token] = personId;
+  PropertiesService.getScriptProperties().setProperty('PERSON_TOKENS', JSON.stringify(tokens));
+  return token;
 }
 
 function json_(obj) {
@@ -177,12 +209,16 @@ function json_(obj) {
 // ------------------------------------------------------------------- sync
 
 /**
- * Without [admin], rows already in the spreadsheet are not changed or
- * deleted: they are listed in `denied` and sent back as they are, so the
- * device drops its edit. Sending the same version again (a retry after a
- * lost answer) is fine.
+ * [user] is { admin, me } from user_(). The admin changes anything. Others
+ * change and delete only rows whose created_by is their own people id;
+ * other edits are listed in `denied` and the row is sent back as it is, so
+ * the device drops the edit. Sending the same version again (a retry after
+ * a lost answer) is fine. created_by of a new row is set here, from the
+ * link, not taken from the device.
  */
-function sync_(req, admin) {
+function sync_(req, user) {
+  const admin = user.admin;
+  const me = user.me;
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -216,8 +252,9 @@ function sync_(req, admin) {
       incoming.forEach(function (row) {
         if (!row.id) return;
         const at = rowById[row.id];
+        const own = at !== undefined && !!me && text_(values[at][col.created_by]) === me;
         if (!admin && (at !== undefined
-          ? text_(values[at][col.updated_at]) !== String(row.updated_at)
+          ? text_(values[at][col.updated_at]) !== String(row.updated_at) && !own
           : String(row.deleted) === '1')) {
           if (at !== undefined) rejected.push(at);
           denied[table].push(row.id);
@@ -230,6 +267,10 @@ function sync_(req, admin) {
         seq += 1;
         const out = header.map(function (name) {
           if (name === 'server_seq') return String(seq);
+          if (name === 'created_by') {
+            if (at !== undefined) return values[at][col.created_by];
+            return admin ? text_(row.created_by) : me;
+          }
           if (name in row) return text_(row[name]);
           return at !== undefined ? values[at][col[name]] : '';
         });
@@ -260,7 +301,7 @@ function sync_(req, admin) {
     });
 
     props.setProperty('SEQ', String(seq));
-    return { ok: true, admin: !!admin, accepted: accepted, denied: denied, pulled: pulled, seq: maxSeq };
+    return { ok: true, admin: !!admin, me: me, accepted: accepted, denied: denied, pulled: pulled, seq: maxSeq };
   } finally {
     lock.releaseLock();
   }
@@ -317,7 +358,7 @@ function importOldDailyChecks() {
   const ua = readOldChecks_(OLD_UA_CHECKS, OLD_UA_COLUMNS);
   const gcs = readOldChecks_(OLD_GCS_CHECKS, OLD_GCS_COLUMNS);
   const out = buildImportedChecks_(ua, gcs, aircraftIds_());
-  const res = sync_({ push: { aircraft: out.aircraft, daily_checks_fb3: out.checks }, since: {} }, true);
+  const res = sync_({ push: { aircraft: out.aircraft, daily_checks_fb3: out.checks }, since: {} }, { admin: true, me: '' });
   Logger.log('Imported ' + res.accepted.daily_checks_fb3.length + ' daily checks (' +
     ua.length + ' UA and ' + gcs.length + ' GCS answers), ' + out.aircraft.length + ' new drones.');
   return res.accepted.daily_checks_fb3.length;

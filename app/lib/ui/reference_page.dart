@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/local_db.dart';
 import '../data/schema.dart';
@@ -77,7 +78,7 @@ class _ReferenceList extends StatelessWidget {
                     ].join(' · '),
                   ),
                   trailing: r['active'] == 0 ? const Text('inactive') : null,
-                  onTap: services.isAdmin ? () => _edit(context, r) : null,
+                  onTap: services.canChange(r) ? () => _edit(context, r) : null,
                 ),
             ],
           );
@@ -149,7 +150,13 @@ class _ReferenceList extends StatelessWidget {
               ),
             ),
             actions: [
-              if (row != null && services.isAdmin)
+              if (row != null && table == Tables.people && services.isAdmin)
+                TextButton(
+                  key: const Key('person-link'),
+                  onPressed: () => _showPersonLink(context, row),
+                  child: const Text('Personal link'),
+                ),
+              if (row != null && services.canChange(row))
                 TextButton(
                   key: const Key('delete-reference'),
                   onPressed: () async {
@@ -212,3 +219,44 @@ Future<bool> _confirmDelete(BuildContext context, DbRow row) async =>
       ),
     ) ==
     true;
+
+/// The admin gets a person's own link: with it in Settings, that person can
+/// change and delete the flights and checks they added.
+Future<void> _showPersonLink(BuildContext context, DbRow person) async {
+  final sync = Services.of(context).sync;
+  String text;
+  try {
+    text = await sync.personLink(person['id'] as String);
+    await Clipboard.setData(ClipboardData(text: text));
+  } catch (e) {
+    text = 'Could not make the link: $e';
+  }
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('Link for ${person['name']}'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Copied. Send it only to this person: they paste it in '
+              'Settings and can then change and delete their own entries.',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(text, key: const Key('person-link-text')),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+}

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/schema.dart';
 import 'services.dart';
 
 /// The connection link to the spreadsheet's Apps Script.
@@ -102,9 +103,12 @@ class _SettingsPageState extends State<SettingsPage> {
               Text(
                 key: const Key('access-level'),
                 sync.isAdmin
-                    ? 'Access: administrator (can change and delete data)'
-                    : 'Access: pilot (can add data; changes and deletes '
-                          'are for the admin link)',
+                    ? 'Access: administrator (can change and delete all data)'
+                    : sync.me != null
+                    ? 'Access: ${Services.of(context).logbook.names(Tables.people)[sync.me] ?? 'own link'} '
+                          '(can change and delete own entries)'
+                    : 'Access: add only (ask the admin for your own link '
+                          'to change your entries)',
               ),
             ],
           ),

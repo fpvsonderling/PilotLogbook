@@ -5,7 +5,7 @@ import 'package:pilot_logbook/data/sync/sync_service.dart';
 
 /// In-memory stand-in for the spreadsheet script, with the same contract as
 /// apps_script/Code.gs (that file has its own tests). Token 'secret' is the
-/// pilots' link, 'admin-secret' the admin link.
+/// pilots' link, 'admin-secret' the admin link, 'anna-secret' Anna's own.
 class FakeSheets implements SyncTransport {
   final tables = <String, Map<String, Map<String, Object?>>>{};
   var seq = 0;
@@ -15,7 +15,8 @@ class FakeSheets implements SyncTransport {
   Future<Map<String, Object?>> call(Map<String, Object?> body) async {
     calls++;
     final admin = body['token'] == 'admin-secret';
-    if (!admin && body['token'] != 'secret') {
+    final me = body['token'] == 'anna-secret' ? 'p-anna' : '';
+    if (!admin && me.isEmpty && body['token'] != 'secret') {
       throw SyncException('Wrong access token');
     }
     final push = body['push'] as Map<String, List<DbRow>>;
@@ -32,9 +33,11 @@ class FakeSheets implements SyncTransport {
       for (final r in push[t.name] ?? const <DbRow>[]) {
         final id = r['id'] as String;
         final existing = rows[id];
+        final own =
+            existing != null && me.isNotEmpty && existing['created_by'] == me;
         if (!admin &&
             (existing != null
-                ? existing['updated_at'] != r['updated_at']
+                ? existing['updated_at'] != r['updated_at'] && !own
                 : r['deleted'] == 1)) {
           if (existing != null) rejected.add(id);
           no.add(id);
@@ -52,6 +55,11 @@ class FakeSheets implements SyncTransport {
         rows[id] = {
           for (final e in r.entries) e.key: e.value?.toString() ?? '',
           'server_seq': '$seq',
+          'created_by': existing != null
+              ? existing['created_by']
+              : admin
+              ? r['created_by']?.toString() ?? ''
+              : me,
         };
         ok.add({'id': id, 'updated_at': r['updated_at'], 'server_seq': seq});
       }
@@ -72,6 +80,7 @@ class FakeSheets implements SyncTransport {
     return {
       'ok': true,
       'admin': admin,
+      'me': me,
       'accepted': accepted,
       'denied': denied,
       'pulled': pulled,
@@ -80,10 +89,13 @@ class FakeSheets implements SyncTransport {
   }
 }
 
-SyncService device(FakeSheets sheets, {bool admin = false}) {
+SyncService device(FakeSheets sheets, {bool admin = false, String? token}) {
   final db = LocalDb.inMemory();
   db.setSetting(SyncService.urlKey, 'https://example.test/exec');
-  db.setSetting(SyncService.tokenKey, admin ? 'admin-secret' : 'secret');
+  db.setSetting(
+    SyncService.tokenKey,
+    token ?? (admin ? 'admin-secret' : 'secret'),
+  );
   return SyncService(db)..transportFactory = (_) => sheets;
 }
 
@@ -136,6 +148,30 @@ void main() {
     await admin.sync();
     await pilot.sync();
     expect(pilot.db.rows(Tables.flights), isEmpty);
+  });
+
+  test('with an own link a person changes only their own entries', () async {
+    final sheets = FakeSheets();
+    final anna = device(sheets, token: 'anna-secret');
+    final admin = device(sheets, admin: true);
+    final others = admin.db.save(Tables.flights, {'notes': 'admin'});
+    await admin.sync();
+
+    await anna.sync();
+    expect(anna.me, 'p-anna');
+    final mine = anna.db.save(Tables.flights, {'notes': 'anna'});
+    expect(anna.db.byId(Tables.flights, mine)!['created_by'], 'p-anna');
+    expect(anna.canChange(anna.db.byId(Tables.flights, mine)!), isTrue);
+    expect(anna.canChange(anna.db.byId(Tables.flights, others)!), isFalse);
+    await anna.sync();
+
+    anna.db.save(Tables.flights, {'id': mine, 'notes': 'fixed'});
+    anna.db.delete(Tables.flights, others);
+    await anna.sync();
+    expect(sheets.tables['flights']![mine]!['notes'], 'fixed');
+    expect(sheets.tables['flights']![others]!['deleted'], '0');
+    expect(anna.db.byId(Tables.flights, others)!['deleted'], 0);
+    expect(anna.pendingCount, 0);
   });
 
   test('a later sync only downloads what changed', () async {

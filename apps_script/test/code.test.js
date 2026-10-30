@@ -134,7 +134,7 @@ const flight = (id, updatedAt, extra = {}) => ({
 test('setup creates one tab per table with headers', () => {
   const { sheets } = load();
   assert.ok(sheets.flights);
-  assert.deepStrictEqual(sheets.flights.cells[0].slice(0, 5), ['id', 'updated_at', 'server_seq', 'deleted', 'date']);
+  assert.deepStrictEqual(sheets.flights.cells[0].slice(0, 5), ['id', 'updated_at', 'server_seq', 'deleted', 'created_by']);
 });
 
 test('rejects a wrong token', () => {
@@ -232,6 +232,42 @@ test('a pilot adds rows but cannot change or delete them', () => {
   assert.strictEqual(admin.admin, true);
   assert.strictEqual(admin.accepted.flights.length, 1);
   assert.strictEqual(sheets.flights.cells[1][header.indexOf('deleted')], '1');
+});
+
+test('a person\'s own link changes and deletes only that person\'s rows', () => {
+  const { post, sheets, ctx } = load();
+  const link = post({ action: 'personLink', person_id: 'p-anna' });
+  assert.strictEqual(link.ok, true);
+  // Asking again gives the same link.
+  assert.strictEqual(post({ action: 'personLink', person_id: 'p-anna' }).token, link.token);
+  const anna = (body) =>
+    JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: link.token, ...body }) } }).text);
+  // Pilots cannot make links.
+  assert.strictEqual(anna({ action: 'personLink', person_id: 'p-anna' }).ok, false);
+
+  // The device cannot claim someone else's row.
+  const added = anna({ action: 'sync', push: { flights: [flight('a', 't1', { created_by: 'p-bob' })] }, since: {} });
+  assert.strictEqual(added.me, 'p-anna');
+  assert.strictEqual(added.pulled.flights[0].created_by, 'p-anna');
+  post({ action: 'sync', push: { flights: [flight('b', 't1', { created_by: 'p-bob' })] }, since: {} });
+
+  const out = anna({
+    action: 'sync',
+    push: { flights: [flight('a', 't2', { notes: 'mine' }), flight('b', 't2', { deleted: 1 })] },
+    since: { flights: 2 },
+  });
+  assert.deepStrictEqual(out.accepted.flights.map((r) => r.id), ['a']);
+  assert.deepStrictEqual(out.denied.flights, ['b']);
+  const h = sheets.flights.cells[0];
+  const row = (id) => sheets.flights.cells.find((r) => r[0] === id);
+  assert.strictEqual(row('a')[h.indexOf('notes')], 'mine');
+  assert.strictEqual(row('a')[h.indexOf('created_by')], 'p-anna');
+  assert.strictEqual(row('b')[h.indexOf('deleted')], '0');
+  assert.strictEqual(row('b')[h.indexOf('created_by')], 'p-bob');
+
+  // Her own row she can delete.
+  anna({ action: 'sync', push: { flights: [flight('a', 't3', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(row('a')[h.indexOf('deleted')], '1');
 });
 
 test('connectionLink gives the web app URL with the access token', () => {

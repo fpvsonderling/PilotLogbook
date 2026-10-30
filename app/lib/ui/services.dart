@@ -21,9 +21,11 @@ class Services extends InheritedWidget {
   static Services of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Services>()!;
 
-  /// Changing and deleting saved data is for the admin link only; other
-  /// users do not see those controls.
+  /// Changing and deleting saved data is for the admin, and for a person
+  /// with their own link on the rows they added; others do not see those
+  /// controls.
   bool get isAdmin => sync.isAdmin;
+  bool canChange(DbRow row) => sync.canChange(row);
 
   @override
   bool updateShouldNotify(Services oldWidget) =>

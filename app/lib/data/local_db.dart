@@ -23,6 +23,10 @@ class LocalDb {
   /// Fires after every write, local or from sync, so screens can reload.
   final changes = DbChanges();
 
+  /// Settings key of the people id of this device's own link (see
+  /// SyncService.me); new rows are marked as theirs.
+  static const meKey = 'me';
+
   /// Overridable clock, for tests.
   DateTime Function() now = () => DateTime.now().toUtc();
 
@@ -112,6 +116,7 @@ class LocalDb {
       'id': id,
       'updated_at': now().toIso8601String(),
       'server_seq': existing?['server_seq'],
+      'created_by': existing == null ? setting(meKey) : existing['created_by'],
       'deleted': 0,
       'dirty': 1,
     };

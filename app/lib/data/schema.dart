@@ -26,6 +26,9 @@ class TableDef {
     Col('updated_at'),
     Col('server_seq', ColType.integer),
     Col('deleted', ColType.integer),
+    // People id of whoever added the row, set by the script from their own
+    // link; they may change and delete it. Empty for the shared links.
+    Col('created_by'),
   ];
 
   List<Col> get allColumns => [...systemColumns, ...columns];

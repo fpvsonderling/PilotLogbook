@@ -123,7 +123,8 @@ class _FlightFormState extends State<FlightForm> {
             automaticallyImplyLeading: false,
             title: Text(widget.flight == null ? 'New flight' : 'Edit flight'),
             actions: [
-              if (widget.flight != null && Services.of(context).isAdmin)
+              if (widget.flight != null &&
+                  Services.of(context).canChange(widget.flight!))
                 IconButton(
                   tooltip: 'Delete',
                   onPressed: _delete,
