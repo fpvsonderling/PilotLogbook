@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'daily_checks_page.dart';
 import 'flights_page.dart';
+import 'nm_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
 import 'settings_page.dart';
@@ -23,6 +24,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.checklist, 'Daily checks'),
     (Icons.favorite, 'Pilot Statistic'),
     (Icons.list_alt, 'Reference data'),
+    (Icons.build, 'Nm'),
     (Icons.settings, 'Settings'),
   ];
 
@@ -32,6 +34,7 @@ class _HomePageState extends State<HomePage> {
     2 => const DailyChecksPage(),
     3 => const StatsPage(),
     4 => const ReferencePage(),
+    5 => const NmPage(),
     _ => const SettingsPage(),
   };
 
