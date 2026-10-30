@@ -21,7 +21,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.flight_takeoff, 'Cargo LogBook'),
     (Icons.search, 'Inspection LogBook'),
     (Icons.checklist, 'Daily checks'),
-    (Icons.favorite, 'Pilot Statistic'),
+    (Icons.bar_chart, 'Statistic'),
     (Icons.list_alt, 'Reference data'),
     (Icons.settings, 'Settings'),
   ];
