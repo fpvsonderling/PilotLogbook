@@ -40,19 +40,14 @@ void main() {
       find.widgetWithText(TextFormField, 'Land'),
       '13:03:30',
     );
-    await tester.enterText(find.widgetWithText(TextFormField, 'What'), 'Fio');
-    await tester.pumpAndSettle();
-    // Pick the suggestion, which also closes the suggestion list.
-    await tester.tap(find.text('Fiona Pickup').last);
-    await tester.pumpAndSettle();
-    // Aborted / Near miss are picked in What too, after a comma.
-    await tester.enterText(
-      find.widgetWithText(TextFormField, 'What'),
-      'Fiona Pickup, nea',
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Fiona Pickup, Near miss').last);
-    await tester.pumpAndSettle();
+    // What takes several picks at once, e.g. a mission and Near miss.
+    for (final what in ['Fiona Pickup', 'Near miss']) {
+      final chip = find.widgetWithText(FilterChip, what);
+      await tester.ensureVisible(chip);
+      await tester.pumpAndSettle();
+      await tester.tap(chip);
+      await tester.pumpAndSettle();
+    }
     final rp = find.widgetWithText(DropdownButtonFormField<String?>, 'RP');
     await tester.ensureVisible(rp);
     await tester.pumpAndSettle();

@@ -56,9 +56,8 @@ class _FlightFormState extends State<FlightForm> {
   );
   late final _used = TextEditingController(text: _text('used'));
   late final _temp = TextEditingController(text: _text('temp_c'));
-  late final _mission = TextEditingController(text: _v['mission'] as String?);
+  late final List<String> _what = missionParts(_v['mission'] as String?);
   late final _notes = TextEditingController(text: _v['notes'] as String?);
-  final _missionFocus = FocusNode();
 
   static final _dateFormat = DateFormat('yyyy-MM-dd');
   static final _timeFormat = DateFormat('HH:mm:ss');
@@ -71,18 +70,15 @@ class _FlightFormState extends State<FlightForm> {
     _v['date'] ??= _dateFormat.format(DateTime.now());
     // Flights marked with the earlier tick boxes, before What said it.
     for (final t in MissionTag.values) {
-      if (_v[t.column] == 1 && !t.isIn(_mission.text)) {
-        _mission.text = t.setIn(_mission.text, true);
-      }
+      if (_v[t.column] == 1 && !_what.contains(t.label)) _what.add(t.label);
     }
   }
 
   @override
   void dispose() {
-    for (final c in [_takeoff, _landing, _used, _temp, _mission, _notes]) {
+    for (final c in [_takeoff, _landing, _used, _temp, _notes]) {
       c.dispose();
     }
-    _missionFocus.dispose();
     super.dispose();
   }
 
@@ -97,9 +93,9 @@ class _FlightFormState extends State<FlightForm> {
       'duration_s': flightSeconds(_takeoff.text, _landing.text),
       'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
       'temp_c': int.tryParse(_temp.text.trim()),
-      'mission': _mission.text.trim(),
+      'mission': _what.join(', '),
       for (final t in MissionTag.values)
-        t.column: t.isIn(_mission.text) ? 1 : null,
+        t.column: _what.contains(t.label) ? 1 : null,
       'notes': _notes.text.trim(),
     });
     Navigator.of(context).pop();
@@ -215,45 +211,26 @@ class _FlightFormState extends State<FlightForm> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // Several things comma separated, as in AppSheet:
-                // "Double, Aborted". Suggestions complete the last one.
-                Autocomplete<String>(
-                  textEditingController: _mission,
-                  focusNode: _missionFocus,
-                  optionsBuilder: (v) {
-                    final parts = v.text.split(',');
-                    final last = parts.removeLast().trim().toLowerCase();
-                    final done = {
-                      for (final p in parts) p.trim().toLowerCase(),
-                    };
-                    final prefix = parts.isEmpty
-                        ? ''
-                        : '${parts.map((p) => p.trim()).join(', ')}, ';
-                    return [
-                      for (final m in {
-                        ...missions,
-                        for (final t in MissionTag.values) t.label,
-                      })
-                        if (m.toLowerCase().contains(last) &&
-                            !done.contains(m.toLowerCase()))
-                          '$prefix$m',
-                    ];
-                  },
-                  fieldViewBuilder: (context, controller, focus, submit) =>
-                      TextFormField(
-                        controller: controller,
-                        focusNode: focus,
-                        decoration: const InputDecoration(
-                          labelText: 'What',
-                          helperText:
-                              'Comma separated, e.g. Double, Aborted or '
-                              'Sandra Delivery, Near miss',
-                        ),
-                        validator: (v) =>
-                            (v ?? '').trim().isEmpty ? 'Required' : null,
-                      ),
+                // Several can be picked, e.g. Double and Aborted; saved
+                // comma separated as in AppSheet: "Double, Aborted".
+                _MultiChoiceField(
+                  label: 'What',
+                  options: [
+                    // Old flights may name things no longer in the list.
+                    for (final p in _what)
+                      if (!missions.contains(p) &&
+                          !MissionTag.values.any((t) => t.label == p))
+                        p,
+                    ...missions,
+                    for (final t in MissionTag.values) t.label,
+                  ],
+                  value: _what,
+                  onChanged: (v) => setState(() {
+                    _what
+                      ..clear()
+                      ..addAll(v);
+                  }),
                 ),
-                const SizedBox(height: 12),
                 _person(
                   'RP',
                   'rp_id',
@@ -381,6 +358,50 @@ class _ChoiceField extends FormField<String> {
                          ),
                      ],
                    ),
+           ),
+         ),
+       );
+}
+
+/// Chips where several can be on at once; [value] keeps the order picked.
+class _MultiChoiceField extends FormField<List<String>> {
+  _MultiChoiceField({
+    required String label,
+    required List<String> options,
+    required List<String> value,
+    required ValueChanged<List<String>> onChanged,
+  }) : super(
+         initialValue: [...value],
+         validator: (v) => (v ?? []).isEmpty ? 'Required' : null,
+         builder: (state) => Padding(
+           padding: const EdgeInsets.only(bottom: 12),
+           child: InputDecorator(
+             decoration: InputDecoration(
+               labelText: label,
+               helperText: 'Pick one or more, e.g. Double and Aborted',
+               border: InputBorder.none,
+               errorText: state.errorText,
+             ),
+             child: Wrap(
+               spacing: 8,
+               runSpacing: 8,
+               children: [
+                 for (final o in options.toSet())
+                   FilterChip(
+                     label: Text(o),
+                     selected: state.value!.contains(o),
+                     onSelected: (on) {
+                       final v = [
+                         for (final p in state.value!)
+                           if (p != o) p,
+                         if (on) o,
+                       ];
+                       state.didChange(v);
+                       onChanged(v);
+                     },
+                   ),
+               ],
+             ),
            ),
          ),
        );
