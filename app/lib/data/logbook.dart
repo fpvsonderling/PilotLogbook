@@ -50,6 +50,21 @@ class DailyCheck {
   ];
 }
 
+/// "What" (mission) of a flight as its separate picks: "Double, aborted"
+/// gives Double and Aborted, with tags spelt as [MissionTag.label].
+List<String> missionParts(String? mission) {
+  final parts = <String>[];
+  for (final raw in (mission ?? '').split(',')) {
+    var p = raw.trim();
+    if (p.isEmpty) continue;
+    for (final t in MissionTag.values) {
+      if (t.isIn(p)) p = t.label;
+    }
+    if (!parts.contains(p)) parts.add(p);
+  }
+  return parts;
+}
+
 /// Tags in a flight's "What" (mission) field, which lists them comma
 /// separated as in AppSheet: "Double, Aborted", "Sandra Delivery, Near miss".
 /// The aborted / near_miss columns are kept in step with them.

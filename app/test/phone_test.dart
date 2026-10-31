@@ -68,12 +68,10 @@ void main() {
       find.widgetWithText(TextFormField, 'Land'),
       '10:12:00',
     );
-    await tester.enterText(
-      find.widgetWithText(TextFormField, 'What'),
-      'Inspection',
-    );
+    final what = find.widgetWithText(FilterChip, 'Inspection');
+    await tester.ensureVisible(what);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Inspection').last);
+    await tester.tap(what);
     await tester.pumpAndSettle();
     final rp = find.widgetWithText(DropdownButtonFormField<String?>, 'RP');
     await tester.ensureVisible(rp);

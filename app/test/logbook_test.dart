@@ -137,6 +137,13 @@ void main() {
     expect(logbook.kindStats().single.name, 'cargo');
   });
 
+  test('What splits into its picks, old spellings included', () {
+    expect(missionParts('Double, Aborted'), ['Double', 'Aborted']);
+    expect(missionParts(' Double , near-miss,'), ['Double', 'Near miss']);
+    expect(missionParts('Fiona Pickup'), ['Fiona Pickup']);
+    expect(missionParts(null), isEmpty);
+  });
+
   test('tick boxes write Aborted / Near miss into What', () {
     expect(MissionTag.aborted.isIn('Double, Aborted'), isTrue);
     expect(MissionTag.nearMiss.isIn('Double, near-miss'), isTrue);
