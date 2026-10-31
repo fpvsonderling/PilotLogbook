@@ -240,6 +240,9 @@ class _FlightFormState extends State<FlightForm> {
                   decoration: const InputDecoration(labelText: 'Notes'),
                   maxLines: 3,
                 ),
+                const SizedBox(height: 8),
+                _flag('Mission aborted', 'aborted'),
+                _flag('Near miss', 'near_miss'),
               ],
             ),
           ),
@@ -247,6 +250,14 @@ class _FlightFormState extends State<FlightForm> {
       ),
     );
   }
+
+  Widget _flag(String label, String key) => CheckboxListTile(
+    contentPadding: EdgeInsets.zero,
+    controlAffinity: ListTileControlAffinity.leading,
+    title: Text(label),
+    value: _v[key] == 1,
+    onChanged: (v) => setState(() => _v[key] = v == true ? 1 : null),
+  );
 
   Widget _number(
     String label,
