@@ -69,7 +69,7 @@ class _FlightFormState extends State<FlightForm> {
   void initState() {
     super.initState();
     _v['date'] ??= _dateFormat.format(DateTime.now());
-    // Flights ticked before the tick boxes wrote to What.
+    // Flights marked with the earlier tick boxes, before What said it.
     for (final t in MissionTag.values) {
       if (_v[t.column] == 1 && !t.isIn(_mission.text)) {
         _mission.text = t.setIn(_mission.text, true);
@@ -215,17 +215,40 @@ class _FlightFormState extends State<FlightForm> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                // Several things comma separated, as in AppSheet:
+                // "Double, Aborted". Suggestions complete the last one.
                 Autocomplete<String>(
                   textEditingController: _mission,
                   focusNode: _missionFocus,
-                  optionsBuilder: (v) => missions.where(
-                    (m) => m.toLowerCase().contains(v.text.toLowerCase()),
-                  ),
+                  optionsBuilder: (v) {
+                    final parts = v.text.split(',');
+                    final last = parts.removeLast().trim().toLowerCase();
+                    final done = {
+                      for (final p in parts) p.trim().toLowerCase(),
+                    };
+                    final prefix = parts.isEmpty
+                        ? ''
+                        : '${parts.map((p) => p.trim()).join(', ')}, ';
+                    return [
+                      for (final m in {
+                        ...missions,
+                        for (final t in MissionTag.values) t.label,
+                      })
+                        if (m.toLowerCase().contains(last) &&
+                            !done.contains(m.toLowerCase()))
+                          '$prefix$m',
+                    ];
+                  },
                   fieldViewBuilder: (context, controller, focus, submit) =>
                       TextFormField(
                         controller: controller,
                         focusNode: focus,
-                        decoration: const InputDecoration(labelText: 'What'),
+                        decoration: const InputDecoration(
+                          labelText: 'What',
+                          helperText:
+                              'Comma separated, e.g. Double, Aborted or '
+                              'Sandra Delivery, Near miss',
+                        ),
                         validator: (v) =>
                             (v ?? '').trim().isEmpty ? 'Required' : null,
                       ),
@@ -248,17 +271,6 @@ class _FlightFormState extends State<FlightForm> {
                   decoration: const InputDecoration(labelText: 'Notes'),
                   maxLines: 3,
                 ),
-                const SizedBox(height: 8),
-                // Ticking adds the word to What, as in the old app.
-                ListenableBuilder(
-                  listenable: _mission,
-                  builder: (context, _) => Column(
-                    children: [
-                      _flag('Mission aborted', MissionTag.aborted),
-                      _flag('Near miss', MissionTag.nearMiss),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -266,14 +278,6 @@ class _FlightFormState extends State<FlightForm> {
       ),
     );
   }
-
-  Widget _flag(String label, MissionTag tag) => CheckboxListTile(
-    contentPadding: EdgeInsets.zero,
-    controlAffinity: ListTileControlAffinity.leading,
-    title: Text(label),
-    value: tag.isIn(_mission.text),
-    onChanged: (v) => _mission.text = tag.setIn(_mission.text, v == true),
-  );
 
   Widget _number(
     String label,
