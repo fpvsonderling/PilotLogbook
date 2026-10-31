@@ -1,0 +1,255 @@
+name: CI
+
+on:
+  push:
+    branches: [main, windows-mvp]
+    # A version tag (v1.0.0, v1.1.0, ...) also publishes a GitHub release.
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release with this version tag, e.g. v1.0.0 (empty: just build)'
+        required: false
+        default: ''
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apps Script tests
+        run: node --test 'apps_script/test/*.test.js'
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze
+      - name: Flutter tests
+        working-directory: app
+        run: flutter test
+
+  windows:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      - name: Build Windows app
+        working-directory: app
+        run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PilotLogbook-windows
+          path: app/build/windows/x64/runner/Release/
+
+  android:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      # One signing key for every build, so a new APK installs over the old
+      # one. The ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD secrets
+      # win; without them a key is made once and kept in the Actions cache.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pilotlogbook-signing
+          key: android-signing-v1
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        working-directory: app/android
+        run: |
+          dir=~/.pilotlogbook-signing
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > app/release.jks
+          else
+            mkdir -p "$dir"
+            if [ ! -f "$dir/release.jks" ]; then
+              head -c 24 /dev/urandom | base64 | tr -d '/+=' > "$dir/password"
+              keytool -genkeypair -keystore "$dir/release.jks" -storetype PKCS12 \
+                -alias pilotlogbook -keyalg RSA -keysize 2048 -validity 10000 \
+                -storepass "$(cat "$dir/password")" -dname "CN=Pilot Logbook"
+            fi
+            cp "$dir/release.jks" app/release.jks
+            PASSWORD=$(cat "$dir/password")
+          fi
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=pilotlogbook\nkeyPassword=%s\n' "$PASSWORD" "$PASSWORD" > key.properties
+      - name: Build APK
+        working-directory: app
+        run: |
+          flutter build apk --release --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk PilotLogbook.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PilotLogbook-android
+          path: app/PilotLogbook.apk
+      # A fixed download link for phones: Releases -> android-latest.
+      - name: Publish android-latest release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: Android (latest build)
+          prerelease: true
+          make_latest: false
+          files: app/PilotLogbook.apk
+          body: Built from ${{ github.sha }} on ${{ env.VERSION }}.
+
+  # On a version tag (or a run started with a version): one release with the
+  # Windows zip and the Android APK.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+    runs-on: ubuntu-latest
+    needs: [windows, android]
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.release || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PilotLogbook-windows
+          path: PilotLogbook
+      - uses: actions/download-artifact@v4
+        with:
+          name: PilotLogbook-android
+          path: .
+      - name: Pack Windows zip
+        run: |
+          zip -qr "PilotLogbook-windows-$VERSION.zip" PilotLogbook
+          mv PilotLogbook.apk "PilotLogbook-android-$VERSION.apk"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: Pilot Logbook ${{ env.VERSION }}
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            PilotLogbook-windows-${{ env.VERSION }}.zip
+            PilotLogbook-android-${{ env.VERSION }}.apk
+          body: |
+            **Windows:** pobierz `PilotLogbook-windows-${{ env.VERSION }}.zip`, rozpakuj i uruchom `PilotLogbook\pilot_logbook.exe`.
+            **Android:** pobierz `PilotLogbook-android-${{ env.VERSION }}.apk` na telefonie i zainstaluj (zezwól na instalację z tego źródła).
+
+  ios:
+    runs-on: macos-latest
+    needs: test
+    env:
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+      # Without the App Store Connect secrets the app is built unsigned, which
+      # only proves it compiles: an iPhone installs nothing Apple has not signed.
+      - name: Build iOS app (unsigned)
+        if: env.APPSTORE_KEY_ID == ''
+        working-directory: app
+        run: |
+          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry PilotLogbook-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        if: env.APPSTORE_KEY_ID == ''
+        with:
+          name: PilotLogbook-ios-unsigned
+          path: app/PilotLogbook-unsigned.ipa
+      # With them, Xcode signs in the cloud with the App Store Connect API key
+      # (no certificates or profiles kept here) and, outside pull requests,
+      # uploads the build to TestFlight.
+      - name: App Store Connect key
+        if: env.APPSTORE_KEY_ID != ''
+        env:
+          APPSTORE_KEY: ${{ secrets.APPSTORE_KEY }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$APPSTORE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
+          printf 'DEVELOPMENT_TEAM=%s\nCODE_SIGN_STYLE=Automatic\n' "$APPLE_TEAM_ID" >> app/ios/Flutter/Release.xcconfig
+      # The App ID must exist before the app can be made in App Store Connect
+      # (Apps -> New App), which Apple's API does not allow.
+      - name: Register bundle ID
+        if: env.APPSTORE_KEY_ID != ''
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          python3 - <<'PY'
+          import json, os, pathlib, time, urllib.error, urllib.request, jwt
+          kid = os.environ["APPSTORE_KEY_ID"]
+          key = (pathlib.Path.home() / f".appstoreconnect/private_keys/AuthKey_{kid}.p8").read_text()
+          now = int(time.time())
+          token = jwt.encode({"iss": os.environ["APPSTORE_ISSUER_ID"], "iat": now, "exp": now + 600,
+                              "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
+          body = {"data": {"type": "bundleIds", "attributes": {
+              "identifier": "com.yavorskyi.pilotlogbook", "name": "Pilot Logbook", "platform": "IOS"}}}
+          req = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/bundleIds",
+              data=json.dumps(body).encode(), method="POST",
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+          auth = {"Authorization": f"Bearer {token}"}
+          ours = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/bundleIds"
+              "?filter[identifier]=com.yavorskyi.pilotlogbook", headers=auth)
+          if json.load(urllib.request.urlopen(ours))["data"]:
+              print("Bundle ID already registered")
+          else:
+              try:
+                  urllib.request.urlopen(req)
+                  print("Bundle ID registered")
+              except urllib.error.HTTPError as e:
+                  raise SystemExit(f"{e.code} {e.read().decode()}")
+          PY
+      - name: Build and sign iOS app
+        if: env.APPSTORE_KEY_ID != ''
+        working-directory: app
+        run: |
+          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          auth=(-allowProvisioningUpdates
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
+            -authenticationKeyID "$APPSTORE_KEY_ID"
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID")
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner \
+            -configuration Release -sdk iphoneos -destination generic/platform=iOS \
+            -archivePath build/Runner.xcarchive archive CODE_SIGNING_ALLOWED=NO
+          destination=export
+          if [ "${{ github.event_name }}" != pull_request ]; then destination=upload; fi
+          cat > ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>$destination</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/Runner.xcarchive \
+            -exportOptionsPlist ExportOptions.plist -exportPath build/ipa "${auth[@]}"
+      - uses: actions/upload-artifact@v4
+        if: env.APPSTORE_KEY_ID != '' && github.event_name == 'pull_request'
+        with:
+          name: PilotLogbook-ios
+          path: app/build/ipa/*.ipa
