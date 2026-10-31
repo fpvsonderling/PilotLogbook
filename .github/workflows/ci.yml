@@ -161,13 +161,13 @@ jobs:
           token = jwt.encode({"iss": os.environ["APPSTORE_ISSUER_ID"], "iat": now, "exp": now + 600,
                               "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
           body = {"data": {"type": "bundleIds", "attributes": {
-              "identifier": "com.pilotlogbook.pilotLogbook", "name": "Pilot Logbook", "platform": "IOS"}}}
+              "identifier": "com.yavorskyi.pilotlogbook", "name": "Pilot Logbook", "platform": "IOS"}}}
           req = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/bundleIds",
               data=json.dumps(body).encode(), method="POST",
               headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
           auth = {"Authorization": f"Bearer {token}"}
           ours = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/bundleIds"
-              "?filter[identifier]=com.pilotlogbook.pilotLogbook", headers=auth)
+              "?filter[identifier]=com.yavorskyi.pilotlogbook", headers=auth)
           if json.load(urllib.request.urlopen(ours))["data"]:
               print("Bundle ID already registered")
           else:
