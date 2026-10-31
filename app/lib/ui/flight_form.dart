@@ -69,6 +69,12 @@ class _FlightFormState extends State<FlightForm> {
   void initState() {
     super.initState();
     _v['date'] ??= _dateFormat.format(DateTime.now());
+    // Flights marked with the earlier tick boxes, before What said it.
+    for (final t in MissionTag.values) {
+      if (_v[t.column] == 1 && !t.isIn(_mission.text)) {
+        _mission.text = t.setIn(_mission.text, true);
+      }
+    }
   }
 
   @override
@@ -92,6 +98,8 @@ class _FlightFormState extends State<FlightForm> {
       'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
       'temp_c': int.tryParse(_temp.text.trim()),
       'mission': _mission.text.trim(),
+      for (final t in MissionTag.values)
+        t.column: t.isIn(_mission.text) ? 1 : null,
       'notes': _notes.text.trim(),
     });
     Navigator.of(context).pop();
@@ -207,17 +215,40 @@ class _FlightFormState extends State<FlightForm> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                // Several things comma separated, as in AppSheet:
+                // "Double, Aborted". Suggestions complete the last one.
                 Autocomplete<String>(
                   textEditingController: _mission,
                   focusNode: _missionFocus,
-                  optionsBuilder: (v) => missions.where(
-                    (m) => m.toLowerCase().contains(v.text.toLowerCase()),
-                  ),
+                  optionsBuilder: (v) {
+                    final parts = v.text.split(',');
+                    final last = parts.removeLast().trim().toLowerCase();
+                    final done = {
+                      for (final p in parts) p.trim().toLowerCase(),
+                    };
+                    final prefix = parts.isEmpty
+                        ? ''
+                        : '${parts.map((p) => p.trim()).join(', ')}, ';
+                    return [
+                      for (final m in {
+                        ...missions,
+                        for (final t in MissionTag.values) t.label,
+                      })
+                        if (m.toLowerCase().contains(last) &&
+                            !done.contains(m.toLowerCase()))
+                          '$prefix$m',
+                    ];
+                  },
                   fieldViewBuilder: (context, controller, focus, submit) =>
                       TextFormField(
                         controller: controller,
                         focusNode: focus,
-                        decoration: const InputDecoration(labelText: 'What'),
+                        decoration: const InputDecoration(
+                          labelText: 'What',
+                          helperText:
+                              'Comma separated, e.g. Double, Aborted or '
+                              'Sandra Delivery, Near miss',
+                        ),
                         validator: (v) =>
                             (v ?? '').trim().isEmpty ? 'Required' : null,
                       ),

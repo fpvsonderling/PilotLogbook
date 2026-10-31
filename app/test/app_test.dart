@@ -45,6 +45,14 @@ void main() {
     // Pick the suggestion, which also closes the suggestion list.
     await tester.tap(find.text('Fiona Pickup').last);
     await tester.pumpAndSettle();
+    // Aborted / Near miss are picked in What too, after a comma.
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'What'),
+      'Fiona Pickup, nea',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fiona Pickup, Near miss').last);
+    await tester.pumpAndSettle();
     final rp = find.widgetWithText(DropdownButtonFormField<String?>, 'RP');
     await tester.ensureVisible(rp);
     await tester.pumpAndSettle();
@@ -56,10 +64,12 @@ void main() {
     await tester.pumpAndSettle();
 
     final flight = db.rows(Tables.flights).single;
-    expect(flight['mission'], 'Fiona Pickup');
+    expect(flight['mission'], 'Fiona Pickup, Near miss');
     expect(flight['kind'], 'cargo');
     expect(flight['duration_s'], 210);
     expect(flight['battery_id'], battery);
+    expect(flight['near_miss'], 1);
+    expect(flight['aborted'], isNull);
     expect(find.text('0:03:30'), findsOneWidget);
     expect(find.text('Cargo LogBook · 1 flights'), findsOneWidget);
   });
@@ -111,5 +121,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Required'), findsWidgets);
     expect(db.rows(Tables.flights), isEmpty);
+  });
+
+  testWidgets('Statistic counts aborted missions and near misses', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    final project = db.save(Tables.projects, {'name': 'Statkraft'});
+    db.save(Tables.flights, {
+      'date': '2026-10-30',
+      'project_id': project,
+      'duration_s': 210,
+      'aborted': 1,
+    });
+    db.save(Tables.flights, {'date': '2026-10-30', 'project_id': project});
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.tap(find.text('Statistic'));
+    await tester.pumpAndSettle();
+    expect(find.text('Aborted missions'), findsOneWidget);
+    expect(find.text('50.0% of flights'), findsOneWidget);
+    expect(find.text('Statkraft'), findsOneWidget);
   });
 }

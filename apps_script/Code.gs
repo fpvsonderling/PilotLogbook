@@ -23,15 +23,17 @@ const SCHEMA = {
   aircraft: ['name', 'model', 'serial', 'active'],
   batteries: ['name', 'set_name', 'serial', 'active'],
   mission_types: ['name', 'active'],
-  flights: ['date', 'kind', 'project_id', 'aircraft_id', 'battery_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes'],
+  flights: ['date', 'kind', 'project_id', 'aircraft_id', 'battery_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes', 'aborted', 'near_miss'],
   checklist_templates: ['name', 'kind', 'active'],
   checklist_items: ['template_id', 'position', 'label'],
   checks: ['template_id', 'aircraft_id', 'performed_at', 'performed_by_id', 'notes'],
   check_answers: ['check_id', 'item_id', 'result', 'comment'],
   daily_checks_fb3: ['checked_at', 'aircraft_id', 'pilot_id', 'motors_propellers', 'centre_plate', 'load_structure', 'landing_gear', 'cargo_compartment', 'external_rf', 'power_on_gcs', 'ua_power_on', 'rfd_rclh', 'fts_rc_video', 'switch_off', 'storage', 'notes'],
   daily_checks_m30t: ['checked_at', 'aircraft_id', 'pilot_id', 'body_arms', 'propellers_motors', 'gimbal_camera', 'batteries', 'rc_plus', 'before_takeoff', 'notes'],
-  faults: ['reported_at', 'aircraft_id', 'battery_id', 'equipment', 'severity', 'description', 'discovered_by_id', 'status', 'repair_started_at', 'technicians', 'work_performed', 'materials_used', 'final_note', 'signatory_id', 'signed_at'],
-  fault_photos: ['fault_id', 'drive_file_id', 'url'],
+  faults: ['reported_at', 'aircraft_id', 'battery_id', 'equipment', 'severity', 'description', 'discovered_by_id'],
+  fault_repairs: ['fault_id', 'started_at', 'finished_at', 'technicians', 'work_performed', 'materials_used', 'notes'],
+  fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
+  fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   documents: ['title', 'url', 'notes'],
 };
@@ -166,6 +168,7 @@ function doPost(e) {
       return json_({ ok: true, token: personToken_(String(req.person_id || '')) });
     }
     if (req.action === 'uploadPhoto') return json_(uploadPhoto_(req));
+    if (req.action === 'photo') return json_(photo_(String(req.drive_file_id || '')));
     return json_({ ok: false, error: 'Unknown action ' + req.action });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -473,6 +476,200 @@ function uploadPhoto_(req) {
   const blob = Utilities.newBlob(Utilities.base64Decode(req.data), req.mimeType || 'image/jpeg', req.name);
   const file = folder.createFile(blob);
   return { ok: true, drive_file_id: file.getId(), url: file.getUrl() };
+}
+
+/**
+ * A photo's bytes as base64, for the app to show and keep offline. Only
+ * files listed in fault_photos, so a link cannot read other Drive files.
+ */
+function photo_(fileId) {
+  if (!fileId || photoIds_().indexOf(fileId) < 0) return { ok: false, error: 'Unknown photo' };
+  const blob = DriveApp.getFileById(fileId).getBlob();
+  return { ok: true, mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+
+function photoIds_() {
+  const sheet = ensureSheet_('fault_photos', false);
+  if (sheet.getLastRow() < 2) return [];
+  const header = readHeader_(sheet);
+  const col = header.indexOf('drive_file_id');
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues()
+    .map(function (r) { return String(r[col]); });
+}
+
+// ------------------------------------------------- old fault reports import
+
+const OLD_FAULTS = '1JNJ2zhb0Hu0rzot8aZ_EL2UIXkxgfQsU2Tdo4VgzAIA';
+
+/**
+ * Run once from the editor: copies the old AppSheet "FB3 Fault Repair
+ * Report" (tab MFR) into the new tabs, every fault with its repair,
+ * sign-off and photos. The old sheet is only read. Safe to rerun. Another
+ * spreadsheet or tab can be given: importOldFaults('1abc...', 'Sheet1').
+ */
+function importOldFaults(spreadsheetId, sheetName) {
+  const ss = SpreadsheetApp.openById(spreadsheetId || OLD_FAULTS);
+  const sheet = ss.getSheetByName(sheetName || 'MFR') || ss.getSheets()[0];
+  const rows = sheet.getDataRange().getDisplayValues();
+  const out = buildImportedFaults_(rows, aircraftIds_(), namedIds_('people'), findPhoto_);
+  const res = sync_({ push: out, since: {} }, { admin: true, me: '' });
+  Logger.log('Imported ' + res.accepted.faults.length + ' faults, ' +
+    res.accepted.fault_repairs.length + ' repairs, ' + res.accepted.fault_signoffs.length +
+    ' sign-offs, ' + res.accepted.fault_photos.length + ' photos (' + out.missingPhotos + ' photos not found on Drive).');
+  return res.accepted.faults.length;
+}
+
+/** Old column names, matched by their start, ignoring case. */
+const OLD_FAULT_COLUMNS = {
+  at: 'timestamp',
+  item: 'dron',
+  severity: 'severity',
+  description: 'description',
+  photo: 'visual',
+  discoveredBy: 'discovered',
+  status: 'status',
+  repairStart: 'repair start',
+  technician: 'technician',
+  work: 'work performed',
+  materials: 'materials',
+  torque: 'specific torque',
+  verification: 'post-repair',
+  functionalTest: 'functional test',
+  finalNote: 'final note',
+  signatory: 'authorized sign',
+  signedAt: 'date',
+};
+
+/**
+ * Old rows (header first) to rows for faults, fault_repairs, fault_signoffs
+ * and fault_photos. [findPhoto] turns AppSheet's image path into a Drive
+ * file ({ id, url }) or null.
+ */
+function buildImportedFaults_(rows, aircraftIds, peopleIds, findPhoto) {
+  const updatedAt = '2026-10-31T00:00:00.000Z';
+  const header = rows[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  const idx = {};
+  Object.keys(OLD_FAULT_COLUMNS).forEach(function (k) {
+    // "date" alone is the sign-off date; other names match by their start.
+    idx[k] = header.findIndex(function (h) {
+      return k === 'signedAt' ? h === 'date' || h.indexOf('authorized date') === 0 : h.indexOf(OLD_FAULT_COLUMNS[k]) === 0;
+    });
+  });
+  const get = function (r, k) { return idx[k] < 0 ? '' : String(r[idx[k]] === undefined ? '' : r[idx[k]]).trim(); };
+  const person = function (name) {
+    return peopleIds[name.toLowerCase()] || name;
+  };
+  const sys = function (id) { return { id: id, updated_at: updatedAt, deleted: 0 }; };
+  const out = { aircraft: [], faults: [], fault_repairs: [], fault_signoffs: [], fault_photos: [], missingPhotos: 0 };
+  rows.slice(1).forEach(function (r) {
+    const at = anyTimestamp_(get(r, 'at'));
+    if (!at) return;
+    const item = get(r, 'item');
+    const id = 'import-fault-' + at.replace(/\D/g, '') + '-' + item.replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
+    // "24", "024", "Dron 18" or "Dron 24 bat 181 set 44 id3" (the rest
+    // stays as equipment text).
+    const drone = item.match(/^(?:dron[e]?\s*)?0*(\d{1,3})$/i) || item.match(/^dron[e]?\s*0*(\d{1,3})\b/i);
+    let aircraftId = '';
+    if (drone) {
+      aircraftId = aircraftIds[drone[1]];
+      if (!aircraftId) {
+        aircraftId = aircraftIds[drone[1]] = 'import-aircraft-' + drone[1];
+        out.aircraft.push(Object.assign(sys(aircraftId), { name: drone[1], active: 1 }));
+      }
+    }
+    const severity = get(r, 'severity').match(/(\d)/);
+    out.faults.push(Object.assign(sys(id), {
+      reported_at: at,
+      aircraft_id: aircraftId,
+      battery_id: '',
+      equipment: drone && drone[0] === item ? '' : item,
+      severity: severity ? severity[1] : '',
+      description: get(r, 'description'),
+      discovered_by_id: person(get(r, 'discoveredBy')),
+    }));
+    get(r, 'photo').split(/\s*,\s*/).filter(String).forEach(function (path, i) {
+      const file = findPhoto(path);
+      if (!file) { out.missingPhotos++; return; }
+      out.fault_photos.push(Object.assign(sys(id + '-photo-' + i), {
+        fault_id: id, repair_id: '', drive_file_id: file.id, url: file.url,
+      }));
+    });
+    const status = get(r, 'status').toLowerCase();
+    const work = get(r, 'work');
+    if (status.indexOf('repaired') === 0 || status.indexOf('fixed') === 0 || work) {
+      out.fault_repairs.push(Object.assign(sys(id + '-repair'), {
+        fault_id: id,
+        started_at: anyTimestamp_(get(r, 'repairStart')),
+        finished_at: '',
+        technicians: get(r, 'technician'),
+        work_performed: work,
+        materials_used: get(r, 'materials'),
+        notes: '',
+      }));
+    }
+    if (status.indexOf('fixed') === 0) {
+      out.fault_signoffs.push(Object.assign(sys(id + '-signoff'), {
+        fault_id: id,
+        tested_at: anyTimestamp_(get(r, 'signedAt')) || anyTimestamp_(get(r, 'repairStart')) || at,
+        result: 'pass',
+        notes: [
+          ['Torque', get(r, 'torque')],
+          ['Verification', get(r, 'verification')],
+          ['Functional test', get(r, 'functionalTest')],
+          ['', get(r, 'finalNote')],
+        ].filter(function (n) { return n[1]; }).map(function (n) { return n[0] ? n[0] + ': ' + n[1] : n[1]; }).join('. '),
+        signatory_id: person(get(r, 'signatory')),
+      }));
+    }
+  });
+  return out;
+}
+
+/**
+ * AppSheet and Sheets dates to "yyyy-MM-dd HH:mm:ss": "8/15/2026 10:08:41 AM"
+ * (month first when there is AM/PM), "15/08/2026 10:08:41" (day first) or
+ * "2026-08-15 10:08:41".
+ */
+function anyTimestamp_(v) {
+  const t = String(v || '').trim();
+  const p = function (n) { return ('0' + n).slice(-2); };
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3] + ' ' + p(m[4]) + ':' + m[5] + ':' + (m[6] || '00');
+  m = t.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)?$/i);
+  if (!m) return '';
+  let h = Number(m[4]);
+  let month = m[2];
+  let day = m[1];
+  if (m[7]) {
+    month = m[1];
+    day = m[2];
+    if (m[7].toUpperCase() === 'PM' && h < 12) h += 12;
+    if (m[7].toUpperCase() === 'AM' && h === 12) h = 0;
+  }
+  return m[3] + '-' + p(month) + '-' + p(day) + ' ' + p(h) + ':' + m[5] + ':' + (m[6] || '00');
+}
+
+/** Lower-case name -> id of a reference tab. */
+function namedIds_(table) {
+  const sheet = ensureSheet_(table, false);
+  const header = readHeader_(sheet);
+  const ids = {};
+  if (sheet.getLastRow() < 2) return ids;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues().forEach(function (r) {
+    if (String(r[header.indexOf('deleted')]) === '1') return;
+    ids[String(r[header.indexOf('name')]).trim().toLowerCase()] = String(r[header.indexOf('id')]);
+  });
+  return ids;
+}
+
+/** AppSheet keeps "Folder_Images/name.jpg"; the file is found by its name. */
+function findPhoto_(path) {
+  const name = String(path).split('/').pop();
+  if (!name) return null;
+  const it = DriveApp.getFilesByName(name);
+  if (!it.hasNext()) return null;
+  const file = it.next();
+  return { id: file.getId(), url: file.getUrl() };
 }
 
 // ----------------------------------------------------------------- backup

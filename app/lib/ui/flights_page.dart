@@ -3,38 +3,69 @@ import 'package:flutter/material.dart';
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/schema.dart';
+import '../data/table_filter.dart';
 import 'flight_form.dart';
 import 'services.dart';
+import 'table_tools.dart';
 
-/// Flights of one kind, newest first, grouped by day like the old AppSheet.
-class FlightsPage extends StatelessWidget {
+/// Flights of one kind, newest first, grouped by day like the old AppSheet,
+/// with filters and a PDF of what the filters show.
+class FlightsPage extends StatefulWidget {
   const FlightsPage({super.key, required this.kind, required this.title});
 
   final String kind;
   final String title;
 
-  static const _columns = [
-    ('Date', 90.0),
-    ('Project', 130.0),
-    ('Drone', 70.0),
-    ('Take off', 80.0),
-    ('Land', 80.0),
-    ('Time', 70.0),
-    ('Batt', 50.0),
-    ('Used', 50.0),
-    ('Temp', 50.0),
-    ('What', 140.0),
-    ('RP', 140.0),
-    ('PA', 140.0),
-    ('Spotter', 140.0),
-    ('Notes', 260.0),
+  @override
+  State<FlightsPage> createState() => _FlightsPageState();
+}
+
+class _FlightsPageState extends State<FlightsPage> {
+  var _filter = const TableFilter();
+
+  static final _fields = <FilterField<DbRow>>[
+    FilterField('project', 'Project', (f) => [f['project_id'] as String?]),
+    FilterField('drone', 'Drone', (f) => [f['aircraft_id'] as String?]),
+    // Anyone in the crew, so a person finds every flight they were on.
+    FilterField(
+      'pilot',
+      'Pilot',
+      (f) => [
+        f['rp_id'] as String?,
+        f['pa_id'] as String?,
+        f['spotter_id'] as String?,
+      ],
+    ),
+    FilterField('mission', 'What', (f) => [f['mission'] as String?]),
   ];
 
-  static final double _width = _columns.fold(32.0, (w, c) => w + c.$2);
+  static List<TableColumn<DbRow>> _columns({
+    required Map<String, String> projects,
+    required Map<String, String> aircraft,
+    required Map<String, String> batteries,
+    required Map<String, String> people,
+  }) => [
+    TableColumn('Date', 90, (f) => f['date'] as String? ?? ''),
+    TableColumn('Project', 130, (f) => projects[f['project_id']] ?? ''),
+    TableColumn('Drone', 70, (f) => aircraft[f['aircraft_id']] ?? ''),
+    TableColumn('Take off', 80, (f) => f['takeoff_at'] as String? ?? ''),
+    TableColumn('Land', 80, (f) => f['landing_at'] as String? ?? ''),
+    TableColumn('Time', 70, (f) => formatDuration(f['duration_s'] as int?)),
+    TableColumn('Batt', 50, (f) => batteries[f['battery_id']] ?? ''),
+    TableColumn('Used', 50, (f) => '${f['used'] ?? ''}'),
+    TableColumn('Temp', 50, (f) => '${f['temp_c'] ?? ''}'),
+    TableColumn('What', 140, (f) => f['mission'] as String? ?? ''),
+    TableColumn('RP', 140, (f) => people[f['rp_id']] ?? ''),
+    TableColumn('PA', 140, (f) => people[f['pa_id']] ?? ''),
+    TableColumn('Spotter', 140, (f) => people[f['spotter_id']] ?? ''),
+    TableColumn('Notes', 260, (f) => f['notes'] as String? ?? ''),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final logbook = Services.of(context).logbook;
+    final kind = widget.kind;
+    final title = widget.title;
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => showFlightForm(context, kind: kind),
@@ -43,16 +74,38 @@ class FlightsPage extends StatelessWidget {
       ),
       body: DbBuilder(
         builder: (context) {
-          final flights = logbook.flights(kind: kind);
+          final all = logbook.flights(kind: kind);
           final projects = logbook.names(Tables.projects);
           final aircraft = logbook.names(Tables.aircraft);
           final batteries = logbook.names(Tables.batteries);
           final people = logbook.names(Tables.people);
+          final columns = _columns(
+            projects: projects,
+            aircraft: aircraft,
+            batteries: batteries,
+            people: people,
+          );
+          final labels = {
+            'project': projects,
+            'drone': aircraft,
+            'pilot': people,
+          };
+          final flights = _filter.apply(
+            all,
+            date: (f) => f['date'] as String? ?? '',
+            fields: _fields,
+            columns: columns,
+          );
+          final width = columns.fold(32.0, (w, c) => w + c.width);
           final services = Services.of(context);
           final days = <String, List<DbRow>>{};
           for (final f in flights) {
             days.putIfAbsent(f['date'] as String? ?? '', () => []).add(f);
           }
+          final seconds = flights.fold(
+            0,
+            (n, f) => n + ((f['duration_s'] as int?) ?? 0),
+          );
           final theme = Theme.of(context);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,13 +113,42 @@ class FlightsPage extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
-                  '$title · ${flights.length} flights',
+                  _filter.isEmpty
+                      ? '$title · ${flights.length} flights'
+                      : '$title · ${flights.length} of ${all.length} flights'
+                            ' · ${formatDuration(seconds)}',
                   style: theme.textTheme.titleMedium,
                 ),
               ),
+              if (all.isNotEmpty)
+                FilterBar<DbRow>(
+                  rows: all,
+                  fields: _fields,
+                  labels: labels,
+                  filter: _filter,
+                  onChanged: (f) => setState(() => _filter = f),
+                  onExport: () => exportTablePdf(
+                    context,
+                    title: title,
+                    columns: columns,
+                    rows: flights,
+                    filters: _filter.describe(
+                      _fields,
+                      (key, v) => labels[key]?[v] ?? v,
+                    ),
+                    summary: [
+                      '${flights.length} flights',
+                      'Flight time ${formatDuration(seconds)}',
+                      '${{for (final f in flights) f['date']}.length} days',
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 8),
               Expanded(
-                child: flights.isEmpty
+                child: all.isEmpty
                     ? const Center(child: Text('No flights yet'))
+                    : flights.isEmpty
+                    ? const Center(child: Text('No flights match the filter'))
                     : MediaQuery.sizeOf(context).width < 700
                     // Phones: one card per flight instead of the wide table.
                     ? ListView(
@@ -101,12 +183,12 @@ class FlightsPage extends StatelessWidget {
                     : SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: SizedBox(
-                          width: _width,
+                          width: width,
                           child: ListView(
                             padding: const EdgeInsets.only(bottom: 80),
                             children: [
-                              _row([
-                                for (final c in _columns) c.$1,
+                              _row(columns, [
+                                for (final c in columns) c.header,
                               ], style: theme.textTheme.labelLarge),
                               const Divider(height: 1),
                               for (final day in days.entries) ...[
@@ -131,21 +213,8 @@ class FlightsPage extends StatelessWidget {
                                             flight: f,
                                           )
                                         : null,
-                                    child: _row([
-                                      f['date'] as String? ?? '',
-                                      projects[f['project_id']] ?? '',
-                                      aircraft[f['aircraft_id']] ?? '',
-                                      f['takeoff_at'] as String? ?? '',
-                                      f['landing_at'] as String? ?? '',
-                                      formatDuration(f['duration_s'] as int?),
-                                      batteries[f['battery_id']] ?? '',
-                                      '${f['used'] ?? ''}',
-                                      '${f['temp_c'] ?? ''}',
-                                      f['mission'] as String? ?? '',
-                                      people[f['rp_id']] ?? '',
-                                      people[f['pa_id']] ?? '',
-                                      people[f['spotter_id']] ?? '',
-                                      f['notes'] as String? ?? '',
+                                    child: _row(columns, [
+                                      for (final c in columns) c.cell(f),
                                     ]),
                                   ),
                               ],
@@ -161,13 +230,17 @@ class FlightsPage extends StatelessWidget {
     );
   }
 
-  Widget _row(List<String> cells, {TextStyle? style}) => Padding(
+  Widget _row(
+    List<TableColumn<DbRow>> columns,
+    List<String> cells, {
+    TextStyle? style,
+  }) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
     child: Row(
       children: [
         for (var i = 0; i < cells.length; i++)
           SizedBox(
-            width: _columns[i].$2,
+            width: columns[i].width,
             child: Text(
               cells[i],
               style: style,

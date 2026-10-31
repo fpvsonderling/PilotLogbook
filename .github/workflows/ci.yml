@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main, windows-mvp]
+    # A version tag (v1.0.0, v1.1.0, ...) also publishes a GitHub release.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release with this version tag, e.g. v1.0.0 (empty: just build)'
+        required: false
+        default: ''
 
 jobs:
   test:
@@ -106,7 +113,44 @@ jobs:
           prerelease: true
           make_latest: false
           files: app/PilotLogbook.apk
-          body: Built from ${{ github.sha }} on ${{ github.ref_name }}.
+          body: Built from ${{ github.sha }} on ${{ env.VERSION }}.
+
+  # On a version tag (or a run started with a version): one release with the
+  # Windows zip and the Android APK.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+    runs-on: ubuntu-latest
+    needs: [windows, android]
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.release || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PilotLogbook-windows
+          path: PilotLogbook
+      - uses: actions/download-artifact@v4
+        with:
+          name: PilotLogbook-android
+          path: .
+      - name: Pack Windows zip
+        run: |
+          zip -qr "PilotLogbook-windows-$VERSION.zip" PilotLogbook
+          mv PilotLogbook.apk "PilotLogbook-android-$VERSION.apk"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: Pilot Logbook ${{ env.VERSION }}
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            PilotLogbook-windows-${{ env.VERSION }}.zip
+            PilotLogbook-android-${{ env.VERSION }}.apk
+          body: |
+            **Windows:** pobierz `PilotLogbook-windows-${{ env.VERSION }}.zip`, rozpakuj i uruchom `PilotLogbook\pilot_logbook.exe`.
+            **Android:** pobierz `PilotLogbook-android-${{ env.VERSION }}.apk` na telefonie i zainstaluj (zezwól na instalację z tego źródła).
 
   ios:
     runs-on: macos-latest
@@ -148,7 +192,7 @@ jobs:
           printf '%s\n' "$APPSTORE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
           printf 'DEVELOPMENT_TEAM=%s\nCODE_SIGN_STYLE=Automatic\n' "$APPLE_TEAM_ID" >> app/ios/Flutter/Release.xcconfig
       # The App ID must exist before the app can be made in App Store Connect
-      # (Apps -> New App), which Apple's API does not allow; 409 = already there.
+      # (Apps -> New App), which Apple's API does not allow.
       - name: Register bundle ID
         if: env.APPSTORE_KEY_ID != ''
         run: |
