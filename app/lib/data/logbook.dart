@@ -157,6 +157,50 @@ class Logbook {
       for (final (section, note) in c.problems) (c, section, note),
   ];
 
+  /// Every fault, open ones first, then by class (grounded first) and newest.
+  List<FaultCase> faultCases({String? aircraftId}) {
+    Map<String, List<DbRow>> byFault(TableDef t, String orderBy) {
+      final out = <String, List<DbRow>>{};
+      for (final r in db.rows(t, orderBy: orderBy)) {
+        out.putIfAbsent(r['fault_id'] as String? ?? '', () => []).add(r);
+      }
+      return out;
+    }
+
+    final repairs = byFault(
+      Tables.faultRepairs,
+      "COALESCE(NULLIF(finished_at, ''), started_at), updated_at",
+    );
+    final signoffs = byFault(Tables.faultSignoffs, 'tested_at, updated_at');
+    final photos = byFault(Tables.faultPhotos, 'updated_at');
+    final cases = [
+      for (final f in db.rows(
+        Tables.faults,
+        where: aircraftId == null ? null : 'aircraft_id = ?',
+        args: aircraftId == null ? const [] : [aircraftId],
+      ))
+        FaultCase(
+          f,
+          repairs[f['id']] ?? const [],
+          signoffs[f['id']] ?? const [],
+          photos[f['id']] ?? const [],
+        ),
+    ];
+    cases.sort((a, b) {
+      final s = a.status.index.compareTo(b.status.index);
+      if (s != 0) return s;
+      if (a.status != FaultStatus.closed) {
+        final c = b.severity.compareTo(a.severity);
+        if (c != 0) return c;
+      }
+      return b.reportedAt.compareTo(a.reportedAt);
+    });
+    return cases;
+  }
+
+  FaultCase? faultCase(String id) =>
+      faultCases().where((c) => c.id == id).firstOrNull;
+
   /// Flights and flight time per remote pilot (RP), most flights first.
   List<FlightStat> pilotStats() => _stats(
     'f.rp_id',
@@ -252,5 +296,52 @@ class Logbook {
         aborted: r['a'] as int,
         nearMisses: r['m'] as int,
       ),
+  ];
+}
+
+enum FaultStatus { open, repaired, closed }
+
+/// One fault with everything done about it: repairs, test sign-offs and
+/// photos, each its own row (see Tables.faults).
+class FaultCase {
+  FaultCase(this.fault, this.repairs, this.signoffs, this.photos);
+
+  final DbRow fault;
+
+  /// Oldest first, like [signoffs].
+  final List<DbRow> repairs;
+  final List<DbRow> signoffs;
+  final List<DbRow> photos;
+
+  String get id => fault['id'] as String;
+  String get reportedAt => fault['reported_at'] as String? ?? '';
+  int get severity => fault['severity'] as int? ?? 0;
+
+  static String repairTime(DbRow r) =>
+      (r['finished_at'] as String?)?.isNotEmpty == true
+      ? r['finished_at'] as String
+      : r['started_at'] as String? ?? '';
+
+  DbRow? get passedSignoff =>
+      signoffs.where((s) => s['result'] == 'pass').lastOrNull;
+
+  /// Closed once a test passed. Otherwise repaired (waiting for the test)
+  /// when the last repair came after the last failed test.
+  FaultStatus get status {
+    if (passedSignoff != null) return FaultStatus.closed;
+    if (repairs.isEmpty) return FaultStatus.open;
+    final failedAt = signoffs.lastOrNull?['tested_at'] as String? ?? '';
+    return repairTime(repairs.last).compareTo(failedAt) > 0
+        ? FaultStatus.repaired
+        : FaultStatus.open;
+  }
+
+  /// A class 3 fault keeps the drone on the ground until a test passes.
+  bool get grounded => severity == 3 && status != FaultStatus.closed;
+
+  /// Photos of the report, or of one repair when [repairId] is given.
+  List<DbRow> photosOf([String? repairId]) => [
+    for (final p in photos)
+      if ((p['repair_id'] as String? ?? '') == (repairId ?? '')) p,
   ];
 }

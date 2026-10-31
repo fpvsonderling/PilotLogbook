@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../local_db.dart';
+import '../photos.dart';
 import '../schema.dart';
 
 /// Sends one JSON request to the spreadsheet's Apps Script and returns its
@@ -74,9 +76,12 @@ class SyncResult {
 /// One sync = upload every dirty row, then download every row the
 /// spreadsheet changed since the last sync, in a single request.
 class SyncService extends ChangeNotifier {
-  SyncService(this.db);
+  SyncService(this.db, {this.photos});
 
   final LocalDb db;
+
+  /// Where fault photos are kept; without it photos are not uploaded.
+  final PhotoStore? photos;
 
   bool _running = false;
   bool get running => _running;
@@ -167,9 +172,13 @@ class SyncService extends ChangeNotifier {
   }
 
   Future<SyncResult> _sync(SyncTransport transport) async {
+    final waiting = await _uploadPhotos(transport);
     final push = <String, List<DbRow>>{};
     for (final t in Tables.all) {
-      final rows = db.dirtyRows(t);
+      final rows = [
+        for (final r in db.dirtyRows(t))
+          if (!(t == Tables.faultPhotos && waiting.contains(r['id']))) r,
+      ];
       if (rows.isNotEmpty) push[t.name] = rows;
     }
     final answer = await transport({
@@ -214,5 +223,59 @@ class SyncService extends ChangeNotifier {
       }
     });
     return SyncResult(pushed: pushed, pulled: pulled);
+  }
+
+  /// Sends photos taken on this device to Drive and notes their file id, so
+  /// the row reaches the sheet with it. Returns the ids of photos that
+  /// could not be sent; their rows wait for the next sync.
+  Future<Set<String>> _uploadPhotos(SyncTransport transport) async {
+    final store = photos;
+    if (store == null) return const {};
+    final failed = <String>{};
+    for (final r in store.pendingUploads(db)) {
+      final id = r['id'] as String;
+      try {
+        final answer = await transport({
+          'action': 'uploadPhoto',
+          'token': token,
+          'name': 'fault-${r['fault_id']}-$id.jpg',
+          'mimeType': 'image/jpeg',
+          'data': base64Encode(store.file(id).readAsBytesSync()),
+        });
+        db.save(Tables.faultPhotos, {
+          'id': id,
+          'drive_file_id': answer['drive_file_id'],
+          'url': answer['url'],
+        });
+      } catch (e) {
+        failed.add(id);
+        lastError = 'Photo not sent: $e';
+      }
+    }
+    return failed;
+  }
+
+  /// The picture of a fault_photos row: the local file, downloaded from
+  /// Drive first when it was taken on another device. Null when it cannot
+  /// be had now (offline, or not uploaded yet).
+  Future<File?> photoFile(DbRow row) async {
+    final store = photos;
+    if (store == null) return null;
+    final f = store.file(row['id'] as String);
+    if (f.existsSync()) return f;
+    final driveId = row['drive_file_id'] as String? ?? '';
+    if (driveId.isEmpty || !configured) return null;
+    try {
+      final answer = await transportFactory(url!)({
+        'action': 'photo',
+        'token': token,
+        'drive_file_id': driveId,
+      });
+      f.parent.createSync(recursive: true);
+      await f.writeAsBytes(base64Decode(answer['data'] as String));
+      return f;
+    } catch (_) {
+      return null;
+    }
   }
 }
