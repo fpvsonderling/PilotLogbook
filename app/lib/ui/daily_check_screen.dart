@@ -389,44 +389,47 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLow,
-            border: Border(
-              top: BorderSide(color: theme.colorScheme.outlineVariant),
-            ),
-          ),
-          padding: const EdgeInsets.all(12),
-          child: Center(
-            heightFactor: 1,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: FilledButton(
-                  key: const Key('save-check'),
-                  onPressed: complete ? () => _save(checklist) : null,
-                  child: Text(
-                    complete
-                        ? 'Review & save'
-                        : checklist == null
-                        ? 'Pick the drone'
-                        : _pilotId == null
-                        ? 'Pick the pilot'
-                        : '$done / ${sections.length} sections',
-                    style: const TextStyle(
-                      fontFamily: 'Barlow Condensed',
-                      fontSize: 22,
+      // While typing a note on a phone the keyboard needs the room.
+      bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0
+          ? null
+          : SafeArea(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerLow,
+                  border: Border(
+                    top: BorderSide(color: theme.colorScheme.outlineVariant),
+                  ),
+                ),
+                padding: const EdgeInsets.all(12),
+                child: Center(
+                  heightFactor: 1,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 680),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: FilledButton(
+                        key: const Key('save-check'),
+                        onPressed: complete ? () => _save(checklist) : null,
+                        child: Text(
+                          complete
+                              ? 'Review & save'
+                              : checklist == null
+                              ? 'Pick the drone'
+                              : _pilotId == null
+                              ? 'Pick the pilot'
+                              : '$done / ${sections.length} sections',
+                          style: const TextStyle(
+                            fontFamily: 'Barlow Condensed',
+                            fontSize: 22,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -787,7 +790,10 @@ class _ResultButton extends StatelessWidget {
       fontWeight: FontWeight.w700,
     );
     const size = Size(0, 52);
-    final child = icon == null
+    // Three buttons share a phone's width: little padding, and the label
+    // shrinks rather than overflow.
+    const padding = EdgeInsets.symmetric(horizontal: 6);
+    final content = icon == null
         ? Text(label)
         : Row(
             mainAxisSize: MainAxisSize.min,
@@ -797,6 +803,7 @@ class _ResultButton extends StatelessWidget {
               Text(label),
             ],
           );
+    final child = FittedBox(fit: BoxFit.scaleDown, child: content);
     return selected
         ? FilledButton(
             onPressed: onPressed,
@@ -804,6 +811,7 @@ class _ResultButton extends StatelessWidget {
               backgroundColor: color,
               foregroundColor: Colors.white,
               minimumSize: size,
+              padding: padding,
               textStyle: text,
             ),
             child: child,
@@ -814,6 +822,7 @@ class _ResultButton extends StatelessWidget {
               foregroundColor: color,
               side: BorderSide(color: color, width: 2),
               minimumSize: size,
+              padding: padding,
               textStyle: text,
             ),
             child: child,
@@ -898,16 +907,19 @@ class _SummaryDialog extends StatelessWidget {
       ),
       content: good
           ? const Text('All sections OK.')
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final (s, note) in problems)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text('${s.title}: $note'),
-                  ),
-              ],
+          // Many problems scroll instead of running off a phone screen.
+          : SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final (s, note) in problems)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text('${s.title}: $note'),
+                    ),
+                ],
+              ),
             ),
       actions: [
         TextButton(

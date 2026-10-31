@@ -67,6 +67,37 @@ class FlightsPage extends StatelessWidget {
               Expanded(
                 child: flights.isEmpty
                     ? const Center(child: Text('No flights yet'))
+                    : MediaQuery.sizeOf(context).width < 700
+                    // Phones: one card per flight instead of the wide table.
+                    ? ListView(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
+                        children: [
+                          for (final day in days.entries) ...[
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+                              child: Text(
+                                '${day.key}  (${day.value.length})',
+                                style: theme.textTheme.labelLarge,
+                              ),
+                            ),
+                            for (final f in day.value)
+                              _FlightCard(
+                                flight: f,
+                                project: projects[f['project_id']],
+                                drone: aircraft[f['aircraft_id']],
+                                battery: batteries[f['battery_id']],
+                                rp: people[f['rp_id']],
+                                onTap: services.canChange(f)
+                                    ? () => showFlightForm(
+                                        context,
+                                        kind: kind,
+                                        flight: f,
+                                      )
+                                    : null,
+                              ),
+                          ],
+                        ],
+                      )
                     : SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: SizedBox(
@@ -146,4 +177,87 @@ class FlightsPage extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _FlightCard extends StatelessWidget {
+  const _FlightCard({
+    required this.flight,
+    required this.project,
+    required this.drone,
+    required this.battery,
+    required this.rp,
+    required this.onTap,
+  });
+
+  final DbRow flight;
+  final String? project;
+  final String? drone;
+  final String? battery;
+  final String? rp;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final f = flight;
+    final times = [
+      f['takeoff_at'] as String? ?? '',
+      f['landing_at'] as String? ?? '',
+    ].where((t) => t.isNotEmpty).join(' – ');
+    final details = [
+      if (rp != null) 'RP $rp',
+      if (battery != null) 'Batt $battery',
+      if (f['used'] != null) 'Used ${f['used']}',
+      if (f['temp_c'] != null) '${f['temp_c']} °C',
+    ].join(' · ');
+    final notes = f['notes'] as String? ?? '';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      [if (drone != null) 'Drone $drone', ?project].join(' · '),
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                  Text(
+                    formatDuration(f['duration_s'] as int?),
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ],
+              ),
+              if (times.isNotEmpty || (f['mission'] as String? ?? '') != '')
+                Text(
+                  [
+                    times,
+                    f['mission'] as String? ?? '',
+                  ].where((t) => t.isNotEmpty).join(' · '),
+                ),
+              if (details.isNotEmpty)
+                Text(
+                  details,
+                  style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              if (notes.isNotEmpty)
+                Text(
+                  notes,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

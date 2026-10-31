@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Sync with the Google Sheets Apps Script. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="pilot_logbook"
+        android:label="Pilot Logbook"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
