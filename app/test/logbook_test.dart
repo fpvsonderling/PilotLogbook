@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/logbook.dart';
 import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/data/table_filter.dart';
 
 void main() {
   test('flight time from take-off and landing', () {
@@ -135,6 +136,42 @@ void main() {
       [('2026-10', 4), ('2026-09', 3)],
     );
     expect(logbook.kindStats().single.name, 'cargo');
+
+    // The Statistic page's filters narrow every figure.
+    final october = TableFilter(from: '2026-10-01', to: '2026-10-31');
+    expect(logbook.totals(october).all.flights, 4);
+    expect(logbook.totals(october).days, 2);
+    final hornsOct = october.withChoice('project', horns);
+    expect(
+      [
+        for (final m in logbook.monthStats(hornsOct))
+          (m.name, m.flights, m.seconds, m.aborted, m.nearMisses),
+      ],
+      [('2026-10', 2, 400, 1, 1)],
+    );
+    expect(
+      logbook
+          .totals(const TableFilter(chosen: {'kind': 'inspection'}))
+          .all
+          .flights,
+      0,
+    );
+  });
+
+  test('Statistic pilot filter finds any crew member', () {
+    final db = LocalDb.inMemory();
+    final logbook = Logbook(db);
+    final pavlo = db.save(Tables.people, {'name': 'Pavlo'});
+    final emil = db.save(Tables.people, {'name': 'Emil'});
+    db.save(Tables.flights, {'rp_id': pavlo, 'spotter_id': emil});
+    db.save(Tables.flights, {'rp_id': emil, 'pa_id': pavlo});
+    db.save(Tables.flights, {'rp_id': emil});
+    final f = TableFilter(chosen: {'pilot': pavlo});
+    expect(logbook.totals(f).all.flights, 2);
+    expect(
+      [for (final p in logbook.pilotStats(f)) (p.name, p.flights)],
+      [('Emil', 1), ('Pavlo', 1)],
+    );
   });
 
   test('tick boxes write Aborted / Near miss into What', () {
