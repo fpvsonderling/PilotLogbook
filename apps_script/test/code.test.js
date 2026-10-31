@@ -411,3 +411,68 @@ test('a photo is sent back only when fault_photos lists it', () => {
   assert.strictEqual(out.ok, true);
   assert.strictEqual(out.data, 'bytes-of-f1');
 });
+
+test('syncReleases copies a new release to Drive in pieces, over the old files', () => {
+  const { ctx, props } = load();
+  const sizes = { 'PilotLogbook-windows-v2.0.0.zip': 100, 'PilotLogbook-android-v2.0.0.apk': 40 * 1024 * 1024 };
+  const calls = [];
+  const res = (code, headers = {}, body = '') => ({
+    getResponseCode: () => code,
+    getAllHeaders: () => headers,
+    getContentText: () => body,
+    getContent: () => body,
+  });
+  let uploaded = 0;
+  ctx.UrlFetchApp = {
+    fetch(url, opt = {}) {
+      calls.push([opt.method || 'get', url]);
+      if (url.endsWith('/releases/latest')) return res(302, { Location: 'https://github.com/x/releases/tag/v2.0.0' });
+      const asset = url.match(/releases\/download\/v2\.0\.0\/(.+)$/);
+      if (asset) return sizes[asset[1]] ? res(302, { Location: 'https://cdn/' + asset[1] }) : res(404);
+      if (url.startsWith('https://cdn/')) {
+        const size = sizes[url.slice(12)];
+        const [from, to] = opt.headers.Range.slice(6).split('-').map(Number);
+        return res(206, { 'Content-Range': `bytes ${from}-${to}/${size}` }, 'x');
+      }
+      if (url.includes('uploadType=resumable')) return res(200, { Location: 'https://session/' + (++uploaded) });
+      if (url.startsWith('https://session/')) {
+        const [range, total] = opt.headers['Content-Range'].slice(6).split('/');
+        const done = Number(range.split('-')[1]) + 1 === Number(total);
+        return done ? res(200, {}, JSON.stringify({ id: 'drive-' + url.slice(16) })) : res(308);
+      }
+      throw new Error('unexpected ' + url);
+    },
+  };
+  let readme = '';
+  const folder = {
+    getId: () => 'apps',
+    isTrashed: () => false,
+    getFilesByName: () => ({ hasNext: () => false }),
+    createFile: (name, text) => (readme = text),
+  };
+  ctx.DriveApp.getFolderById = () => folder;
+  ctx.DriveApp.getFileById = () => ({ isTrashed: () => false });
+  ctx.MimeType = { PLAIN_TEXT: 'text/plain' };
+  ctx.ScriptApp.getOAuthToken = () => 'tok';
+  props.APPS_FOLDER_ID = 'apps';
+  ctx.LockService.getScriptLock = () => ({ tryLock: () => true, releaseLock() {} });
+
+  ctx.syncReleases();
+  assert.strictEqual(props.APPS_VERSION, 'v2.0.0');
+  assert.deepStrictEqual(JSON.parse(props.APPS_FILES), { windows: 'drive-1', android: 'drive-2' });
+  // 40 MB goes in three 16 MB pieces.
+  assert.strictEqual(calls.filter(([m, u]) => m === 'put' && u === 'https://session/2').length, 3);
+  assert.match(readme, /PilotLogbook-android-v2\.0\.0\.apk/);
+  assert.match(readme, /Maca jest w przygotowaniu/);
+
+  // Same version again: nothing is fetched but the latest tag.
+  calls.length = 0;
+  ctx.syncReleases();
+  assert.deepStrictEqual(calls, [['get', 'https://github.com/fpvsonderling/PilotLogbook/releases/latest']]);
+
+  // The next release goes over the same Drive files (PATCH on their ids).
+  props.APPS_VERSION = 'v1.9.0';
+  calls.length = 0;
+  ctx.syncReleases();
+  assert.ok(calls.some(([m, u]) => m === 'patch' && u.includes('/files/drive-1?')));
+});
