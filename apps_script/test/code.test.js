@@ -60,6 +60,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   let uuid = 0;
   if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
   const oldSheets = {};
+  const driveFiles = [];
   const spreadsheet = {
     getId: () => 'ss1',
     getName: () => 'Pilot Logbook',
@@ -73,7 +74,10 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       openById: (id) =>
         id === 'ss1'
           ? spreadsheet
-          : { getSheets: () => [{ getDataRange: () => ({ getDisplayValues: () => oldSheets[id] }) }] },
+          : {
+              getSheets: () => [{ getDataRange: () => ({ getDisplayValues: () => oldSheets[id] }) }],
+              getSheetByName: () => ({ getDataRange: () => ({ getDisplayValues: () => oldSheets[id] }) }),
+            },
       create: () => spreadsheet,
     },
     PropertiesService: {
@@ -100,6 +104,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       getUuid: () => 'token-' + ++uuid,
       formatDate: () => '2026-11',
       base64Decode: (s) => s,
+      base64Encode: (s) => s,
       newBlob: (data, type, name) => ({ data, type, name }),
     },
     Session: { getScriptTimeZone: () => 'UTC' },
@@ -108,7 +113,14 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       createFolder: (name) => ({
         createFile: (blob) => ({ getId: () => 'f-' + blob.name, getUrl: () => 'https://drive/' + blob.name }),
       }),
-      getFileById: () => ({ makeCopy: (name) => files.push(name) }),
+      getFileById: (id) => ({
+        makeCopy: (name) => files.push(name),
+        getBlob: () => ({ getContentType: () => 'image/jpeg', getBytes: () => 'bytes-of-' + id }),
+      }),
+      getFilesByName: (name) => {
+        const found = driveFiles.includes(name);
+        return { hasNext: () => found, next: () => ({ getId: () => 'drive-' + name, getUrl: () => 'https://drive/' + name }) };
+      },
     },
     Logger: { log() {} },
   };
@@ -118,7 +130,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const send = (token) => (body) =>
     JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token, ...body }) } }).text);
   // token-1 is the pilots' link, token-2 the admin link.
-  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets };
+  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets, driveFiles };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -314,4 +326,88 @@ test('old daily checks: UA and GCS of the same drone and day become one check', 
   // Running it again does not duplicate.
   ctx.importOldDailyChecks();
   assert.strictEqual(sheets.daily_checks_fb3.cells.length, 4);
+});
+
+const rowsOf = (sheet) => {
+  const [h, ...rows] = sheet.cells;
+  return rows.map((r) => Object.fromEntries(h.map((n, i) => [n, r[i]])));
+};
+
+test('old AppSheet fault reports become faults, repairs, sign-offs and photos', () => {
+  const { ctx, sheets, post, oldSheets, driveFiles } = load();
+  post({
+    action: 'sync',
+    push: {
+      aircraft: [{ id: 'd24', updated_at: 't', deleted: 0, name: '24' }],
+      people: [{ id: 'p-emil', updated_at: 't', deleted: 0, name: 'Emil Palla' }],
+    },
+    since: {},
+  });
+  driveFiles.push('a1.Visual Evidence.123.jpg');
+  oldSheets.old = [
+    ['Timestamp', 'Dron №/Bat', 'Severity Level', 'Description of Fault', 'Visual Evidence', 'Discovered By', 'Status',
+      'Repair Start Date/Time:', 'Technician Name', 'Work Performed', 'Materials Used', 'Final Note', 'Authorized Signatory', 'Date'],
+    ['8/15/2026 10:08:41 AM', '24', 'Class 2: Repair required', 'Prop tip splited', 'Fault_Images/a1.Visual Evidence.123.jpg',
+      'Marcel', 'Not Fixed', '', '', '', '', '', '', ''],
+    ['9/7/2026 7:35:00 AM', 'Dron 18', 'Class 1: Monitor only', 'Motor no 3 propeller small crack', '', 'Adam Kolowrocki',
+      'Repaired', '9/7/2026 2:06:00 PM', 'Adam Kolowrocki', 'Damaged prop replaced', '1x CCW Propeller', '', 'Emil Palla', '9/7/2026 2:07:00 PM'],
+    ['6/2/2026 10:49:57 AM', 'Radio Taranis', 'Class 3: Critical - UAS GROUNDED', 'broken switch SH', 'Fault_Images/gone.jpg',
+      'Pavlo Yavorskyi', 'Fixed and Tested', '6/2/2026 7:30:10 PM', 'Pavlo Yavorskyi', 'switch replaced', 'switch',
+      'Everything work fine', 'emil palla', '6/2/2026 8:35:52 PM'],
+  ];
+  oldSheets.old.push(['08/05/2026 15:53:41', 'Dron 24 bat 181 set 44 id3', 'Class 3: Critical - UAS GROUNDED.', 'Melted connectors', '',
+    'Michal Pfeifer', 'Fixed and Tested', '09/05/2026 10:41:00', 'Adam Madziala', 'Connector replaced', 'Connector', 'Ok', 'Yavorskyi', '08/05/2026 15:53:00']);
+  oldSheets.old.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+  assert.strictEqual(ctx.importOldFaults('old'), 4);
+  const faults = rowsOf(sheets.faults);
+  const prop = faults.find((f) => f.description === 'Prop tip splited');
+  assert.strictEqual(prop.reported_at, '2026-08-15 10:08:41');
+  assert.strictEqual(prop.aircraft_id, 'd24');
+  assert.strictEqual(prop.severity, '2');
+  assert.strictEqual(prop.discovered_by_id, 'Marcel');
+  const radio = faults.find((f) => f.equipment === 'Radio Taranis');
+  assert.strictEqual(radio.aircraft_id, '');
+  assert.strictEqual(radio.severity, '3');
+  // Drone 18 was missing and is added.
+  assert.ok(rowsOf(sheets.aircraft).some((a) => a.name === '18'));
+  const melted = faults.find((f) => f.description === 'Melted connectors');
+  assert.strictEqual(melted.reported_at, '2026-05-08 15:53:41');
+  assert.strictEqual(melted.aircraft_id, 'd24');
+  assert.strictEqual(melted.equipment, 'Dron 24 bat 181 set 44 id3');
+  const repairs = rowsOf(sheets.fault_repairs);
+  assert.strictEqual(repairs.length, 3);
+  assert.strictEqual(repairs.find((r) => r.fault_id === radio.id).started_at, '2026-06-02 19:30:10');
+  const signoffs = rowsOf(sheets.fault_signoffs).filter((x) => x.fault_id !== melted.id);
+  assert.strictEqual(signoffs.length, 1);
+  assert.strictEqual(signoffs[0].fault_id, radio.id);
+  assert.strictEqual(signoffs[0].result, 'pass');
+  assert.strictEqual(signoffs[0].signatory_id, 'p-emil');
+  assert.strictEqual(signoffs[0].tested_at, '2026-06-02 20:35:52');
+  const photos = rowsOf(sheets.fault_photos);
+  assert.deepStrictEqual(photos.map((p) => [p.fault_id, p.drive_file_id]), [[prop.id, 'drive-a1.Visual Evidence.123.jpg']]);
+  // Running it again does not duplicate.
+  ctx.importOldFaults('old');
+  assert.strictEqual(sheets.faults.cells.length, 5);
+});
+
+test('timestamps: AppSheet month first with AM/PM, Sheets day first, ISO', () => {
+  const { ctx } = load();
+  assert.strictEqual(ctx.anyTimestamp_('12/1/2026 12:05:00 AM'), '2026-12-01 00:05:00');
+  assert.strictEqual(ctx.anyTimestamp_('6/5/2026 12:30:00 PM'), '2026-06-05 12:30:00');
+  assert.strictEqual(ctx.anyTimestamp_('14/03/2026 18:23'), '2026-03-14 18:23:00');
+  assert.strictEqual(ctx.anyTimestamp_('2026-03-14T18:23:08'), '2026-03-14 18:23:08');
+  assert.strictEqual(ctx.anyTimestamp_('soon'), '');
+});
+
+test('a photo is sent back only when fault_photos lists it', () => {
+  const { post, pilot } = load();
+  assert.strictEqual(pilot({ action: 'photo', drive_file_id: 'f1' }).ok, false);
+  post({
+    action: 'sync',
+    push: { fault_photos: [{ id: 'ph1', updated_at: 't', deleted: 0, fault_id: 'x', drive_file_id: 'f1' }] },
+    since: {},
+  });
+  const out = pilot({ action: 'photo', drive_file_id: 'f1' });
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.data, 'bytes-of-f1');
 });

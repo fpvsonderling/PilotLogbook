@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'data/local_db.dart';
 import 'data/logbook.dart';
+import 'data/photos.dart';
 import 'data/sync/sync_service.dart';
 import 'ui/home.dart';
 import 'ui/services.dart';
@@ -13,7 +14,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final dir = await getApplicationSupportDirectory();
   final db = LocalDb.open(p.join(dir.path, 'pilot_logbook.sqlite'));
-  runApp(PilotLogbookApp(db: db));
+  final photos = PhotoStore(p.join(dir.path, 'photos'));
+  runApp(
+    PilotLogbookApp(
+      db: db,
+      sync: SyncService(db, photos: photos),
+    ),
+  );
 }
 
 class PilotLogbookApp extends StatefulWidget {

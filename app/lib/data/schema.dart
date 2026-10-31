@@ -154,26 +154,44 @@ class Tables {
     Col('notes'),
   ]);
 
+  // Fault Repair Report: each step is its own row, made by whoever did it,
+  // so a technician and a signatory never change someone else's report.
+  // The status follows from the rows (see FaultCase in logbook.dart).
   static const faults = TableDef('faults', [
-    Col('reported_at'),
+    Col('reported_at'), // yyyy-MM-dd HH:mm:ss, local time
     Col('aircraft_id'),
     Col('battery_id'),
+    // Anything else: GCS, charger, radio, a battery set not in the list.
     Col('equipment'),
     Col('severity', ColType.integer), // 1 monitor, 2 repair, 3 grounded
     Col('description'),
+    // People id; imported rows may hold a name that is not in People.
     Col('discovered_by_id'),
-    Col('status'), // not_fixed | repaired | fixed_tested
-    Col('repair_started_at'),
-    Col('technicians'),
+  ]);
+
+  static const faultRepairs = TableDef('fault_repairs', [
+    Col('fault_id'),
+    Col('started_at'),
+    Col('finished_at'),
+    Col('technicians'), // names, comma separated
     Col('work_performed'),
     Col('materials_used'),
-    Col('final_note'),
+    Col('notes'),
+  ]);
+
+  /// Test after a repair and sign-off. "pass" closes the fault, "fail"
+  /// sends it back for another repair.
+  static const faultSignoffs = TableDef('fault_signoffs', [
+    Col('fault_id'),
+    Col('tested_at'),
+    Col('result'), // pass | fail
+    Col('notes'),
     Col('signatory_id'),
-    Col('signed_at'),
   ]);
 
   static const faultPhotos = TableDef('fault_photos', [
     Col('fault_id'),
+    Col('repair_id'), // empty for photos of the report
     Col('drive_file_id'),
     Col('url'),
   ]);
@@ -205,6 +223,8 @@ class Tables {
     dailyChecksFb3,
     dailyChecksM30t,
     faults,
+    faultRepairs,
+    faultSignoffs,
     faultPhotos,
     torqueSpecs,
     documents,
