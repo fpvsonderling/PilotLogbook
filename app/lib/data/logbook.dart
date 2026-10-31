@@ -1,6 +1,7 @@
 import 'checklists.dart';
 import 'local_db.dart';
 import 'schema.dart';
+import 'table_filter.dart';
 
 /// Seconds between two HH:mm[:ss] times; a landing before take-off is taken
 /// as the next day. Null when either time cannot be read.
@@ -234,48 +235,55 @@ class Logbook {
       faultCases().where((c) => c.id == id).firstOrNull;
 
   /// Flights and flight time per remote pilot (RP), most flights first.
-  List<FlightStat> pilotStats() => _stats(
+  List<FlightStat> pilotStats([TableFilter? filter]) => _stats(
+    filter,
     'f.rp_id',
     join: 'JOIN people g ON g.id = f.rp_id',
     name: 'g.name',
   );
 
   /// Flights per spotter.
-  List<FlightStat> spotterStats() => _stats(
+  List<FlightStat> spotterStats([TableFilter? filter]) => _stats(
+    filter,
     'f.spotter_id',
     join: 'JOIN people g ON g.id = f.spotter_id',
     name: 'g.name',
   );
 
   /// Per project; flights without one are under "No project".
-  List<FlightStat> projectStats() => _stats(
+  List<FlightStat> projectStats([TableFilter? filter]) => _stats(
+    filter,
     "COALESCE(f.project_id, '')",
     join: 'LEFT JOIN projects g ON g.id = f.project_id',
     name: "COALESCE(g.name, 'No project')",
   );
 
   /// Per drone.
-  List<FlightStat> droneStats() => _stats(
+  List<FlightStat> droneStats([TableFilter? filter]) => _stats(
+    filter,
     "COALESCE(f.aircraft_id, '')",
     join: 'LEFT JOIN aircraft g ON g.id = f.aircraft_id',
     name: "COALESCE(g.name, 'No drone')",
   );
 
   /// Cargo and inspection flights.
-  List<FlightStat> kindStats() => _stats(
+  List<FlightStat> kindStats([TableFilter? filter]) => _stats(
+    filter,
     "COALESCE(f.kind, '')",
     name: "COALESCE(NULLIF(f.kind, ''), 'Other')",
   );
 
   /// Per month (yyyy-MM), newest first.
-  List<FlightStat> monthStats() => _stats(
+  List<FlightStat> monthStats([TableFilter? filter]) => _stats(
+    filter,
     'substr(f.date, 1, 7)',
     name: 'substr(f.date, 1, 7)',
     where: "f.date LIKE '____-__%'",
     orderBy: 'name DESC',
   );
 
-  FlightTotals totals() {
+  FlightTotals totals([TableFilter? filter]) {
+    final (where, args) = statsScope(filter);
     final r = db
         .select(
           'SELECT COUNT(*) AS n, COALESCE(SUM(duration_s), 0) AS s, '
@@ -284,7 +292,8 @@ class Logbook {
           "COUNT(DISTINCT NULLIF(date, '')) AS d, "
           'COALESCE(MAX(duration_s), 0) AS l, '
           "MIN(NULLIF(date, '')) AS first, MAX(NULLIF(date, '')) AS last "
-          'FROM flights f WHERE deleted = 0',
+          'FROM flights f WHERE f.deleted = 0$where',
+          args,
         )
         .single;
     return FlightTotals(
@@ -305,29 +314,84 @@ class Logbook {
 
   /// Flights grouped by the SQL expression [key], most flights first.
   List<FlightStat> _stats(
+    TableFilter? filter,
     String key, {
     String join = '',
     required String name,
     String? where,
     String orderBy = 'n DESC, name',
-  }) => [
-    for (final r in db.select(
-      'SELECT $key AS k, $name AS name, COUNT(f.id) AS n, '
-      'COALESCE(SUM(f.duration_s), 0) AS s, '
-      'COALESCE(SUM(${MissionTag.aborted.sql('f')}), 0) AS a, '
-      'COALESCE(SUM(${MissionTag.nearMiss.sql('f')}), 0) AS m '
-      'FROM flights f $join '
-      'WHERE f.deleted = 0${where == null ? '' : ' AND $where'} '
-      'GROUP BY k ORDER BY $orderBy',
-    ))
-      FlightStat(
-        r['k'] as String,
-        (r['name'] as String?) ?? '',
-        flights: r['n'] as int,
-        seconds: r['s'] as int,
-        aborted: r['a'] as int,
-        nearMisses: r['m'] as int,
-      ),
+  }) {
+    final (scope, args) = statsScope(filter);
+    return [
+      for (final r in db.select(
+        'SELECT $key AS k, $name AS name, COUNT(f.id) AS n, '
+        'COALESCE(SUM(f.duration_s), 0) AS s, '
+        'COALESCE(SUM(${MissionTag.aborted.sql('f')}), 0) AS a, '
+        'COALESCE(SUM(${MissionTag.nearMiss.sql('f')}), 0) AS m '
+        'FROM flights f $join '
+        'WHERE f.deleted = 0${where == null ? '' : ' AND $where'}$scope '
+        'GROUP BY k ORDER BY $orderBy',
+        args,
+      ))
+        FlightStat(
+          r['k'] as String,
+          (r['name'] as String?) ?? '',
+          flights: r['n'] as int,
+          seconds: r['s'] as int,
+          aborted: r['a'] as int,
+          nearMisses: r['m'] as int,
+        ),
+    ];
+  }
+
+  /// The Statistic page's filter as SQL on the flight `f`: the dates and
+  /// the [statsFields] chosen. Search text is not used there.
+  static (String, List<Object?>) statsScope(TableFilter? filter) {
+    if (filter == null) return ('', const []);
+    final sql = StringBuffer();
+    final args = <Object?>[];
+    if (filter.from != null) {
+      sql.write(' AND substr(f.date, 1, 10) >= ?');
+      args.add(filter.from);
+    }
+    if (filter.to != null) {
+      sql.write(' AND substr(f.date, 1, 10) <= ?');
+      args.add(filter.to);
+    }
+    for (final e in filter.chosen.entries) {
+      switch (e.key) {
+        case 'project':
+          sql.write(' AND f.project_id = ?');
+          args.add(e.value);
+        case 'drone':
+          sql.write(' AND f.aircraft_id = ?');
+          args.add(e.value);
+        case 'pilot':
+          sql.write(' AND ? IN (f.rp_id, f.pa_id, f.spotter_id)');
+          args.add(e.value);
+        case 'kind':
+          sql.write(' AND f.kind = ?');
+          args.add(e.value);
+      }
+    }
+    return (sql.toString(), args);
+  }
+
+  /// What the Statistic page can be filtered by, with the same keys as
+  /// [statsScope].
+  static final statsFields = <FilterField<DbRow>>[
+    FilterField('project', 'Project', (f) => [f['project_id'] as String?]),
+    FilterField('drone', 'Drone', (f) => [f['aircraft_id'] as String?]),
+    FilterField(
+      'pilot',
+      'Pilot',
+      (f) => [
+        f['rp_id'] as String?,
+        f['pa_id'] as String?,
+        f['spotter_id'] as String?,
+      ],
+    ),
+    FilterField('kind', 'Cargo / Inspection', (f) => [f['kind'] as String?]),
   ];
 }
 

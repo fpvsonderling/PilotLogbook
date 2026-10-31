@@ -24,6 +24,7 @@ class FilterBar<T> extends StatefulWidget {
     required this.onChanged,
     this.labels = const {},
     this.onExport,
+    this.search = true,
   });
 
   /// Every row, before filtering: the choices come from these.
@@ -33,6 +34,9 @@ class FilterBar<T> extends StatefulWidget {
   final TableFilter filter;
   final ValueChanged<TableFilter> onChanged;
   final VoidCallback? onExport;
+
+  /// Show the search box.
+  final bool search;
 
   @override
   State<FilterBar<T>> createState() => _FilterBarState<T>();
@@ -192,7 +196,7 @@ class _FilterBarState<T> extends State<FilterBar<T>> {
             label: const Text('PDF'),
           );
     final items = <Widget>[
-      search,
+      if (widget.search) search,
       // On a phone the end of the bar is off screen, so PDF comes first.
       if (narrow) ?export,
       _datesChip(),
@@ -240,9 +244,6 @@ Future<void> exportTablePdf<T>(
   String filters = '',
   List<String> summary = const [],
 }) async {
-  final messenger = ScaffoldMessenger.of(context);
-  final box = context.findRenderObject() as RenderBox?;
-  final origin = box == null ? null : box.localToGlobal(Offset.zero) & box.size;
   try {
     final bytes = await tablePdf(
       title: title,
@@ -253,6 +254,34 @@ Future<void> exportTablePdf<T>(
       regular: await rootBundle.load('assets/fonts/Barlow-Regular.ttf'),
       bold: await rootBundle.load('assets/fonts/Barlow-SemiBold.ttf'),
     );
+    if (!context.mounted) return;
+    await deliverPdf(
+      context,
+      title: title,
+      bytes: bytes,
+      what: '${rows.length} rows',
+    );
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('PDF export failed: $e')));
+    }
+  }
+}
+
+/// Hands a finished PDF to the user: a "Save as" dialog on Windows and
+/// macOS, the share sheet (Files, Drive, mail, ...) on phones. [what] goes
+/// in the "Saved ..." note.
+Future<void> deliverPdf(
+  BuildContext context, {
+  required String title,
+  required Uint8List bytes,
+  String what = 'PDF',
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final box = context.findRenderObject() as RenderBox?;
+  final origin = box == null ? null : box.localToGlobal(Offset.zero) & box.size;
+  try {
     final name =
         '${title.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}_'
         '${DateFormat('yyyy-MM-dd').format(DateTime.now())}.pdf';
@@ -270,7 +299,7 @@ Future<void> exportTablePdf<T>(
       await File(path).writeAsBytes(bytes);
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Saved ${rows.length} rows to $path'),
+          content: Text('Saved $what to $path'),
           action: SnackBarAction(label: 'Open', onPressed: () => _open(path)),
         ),
       );

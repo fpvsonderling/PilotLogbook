@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
+import 'package:pilot_logbook/data/logbook.dart';
 import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/data/stats_pdf.dart';
 import 'package:pilot_logbook/data/table_filter.dart';
 import 'package:pilot_logbook/data/table_pdf.dart';
 import 'package:pilot_logbook/main.dart';
@@ -162,5 +164,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Cargo LogBook · 3 flights'), findsOneWidget);
     expect(find.byKey(const Key('export-pdf')), findsOneWidget);
+  });
+
+  test('Statistic PDF has the figures and every section', () async {
+    ByteData font(String name) =>
+        ByteData.sublistView(File('assets/fonts/$name.ttf').readAsBytesSync());
+    final rows = [
+      for (var i = 0; i < 40; i++)
+        FlightStat(
+          '$i',
+          'Pilot ż$i',
+          flights: 40 - i,
+          seconds: 600 * i,
+          aborted: i % 3,
+          nearMisses: i % 5 == 0 ? 1 : 0,
+        ),
+    ];
+    final bytes = await statsPdf(
+      title: 'Pilot Statistic',
+      figures: const [
+        StatsFigure('Flights', '1089'),
+        StatsFigure('Aborted missions', '60', note: '5.5%', warn: true),
+      ],
+      sections: [
+        StatsSection('Projects', rows, total: true),
+        StatsSection('Spotters', rows, time: false, safety: false),
+        const StatsSection('Drones', []),
+      ],
+      filters: 'Project: Statkraft',
+      regular: font('Barlow-Regular'),
+      bold: font('Barlow-SemiBold'),
+    );
+    expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+    final pages = RegExp(r'/Type\s*/Page[^s]')
+        .allMatches(String.fromCharCodes(bytes))
+        .length;
+    expect(pages, greaterThan(1));
   });
 }
