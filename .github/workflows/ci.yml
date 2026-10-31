@@ -147,6 +147,32 @@ jobs:
           mkdir -p ~/.appstoreconnect/private_keys
           printf '%s\n' "$APPSTORE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
           printf 'DEVELOPMENT_TEAM=%s\nCODE_SIGN_STYLE=Automatic\n' "$APPLE_TEAM_ID" >> app/ios/Flutter/Release.xcconfig
+      # The App ID must exist before the app can be made in App Store Connect
+      # (Apps -> New App), which Apple's API does not allow; 409 = already there.
+      - name: Register bundle ID
+        if: env.APPSTORE_KEY_ID != ''
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          python3 - <<'PY'
+          import json, os, pathlib, time, urllib.error, urllib.request, jwt
+          kid = os.environ["APPSTORE_KEY_ID"]
+          key = (pathlib.Path.home() / f".appstoreconnect/private_keys/AuthKey_{kid}.p8").read_text()
+          now = int(time.time())
+          token = jwt.encode({"iss": os.environ["APPSTORE_ISSUER_ID"], "iat": now, "exp": now + 600,
+                              "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
+          body = {"data": {"type": "bundleIds", "attributes": {
+              "identifier": "com.pilotlogbook.pilotLogbook", "name": "Pilot Logbook", "platform": "IOS"}}}
+          req = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/bundleIds",
+              data=json.dumps(body).encode(), method="POST",
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+          try:
+              urllib.request.urlopen(req)
+              print("Bundle ID registered")
+          except urllib.error.HTTPError as e:
+              if e.code != 409:
+                  raise SystemExit(f"{e.code} {e.read().decode()}")
+              print("Bundle ID already registered")
+          PY
       - name: Build and sign iOS app
         if: env.APPSTORE_KEY_ID != ''
         working-directory: app
