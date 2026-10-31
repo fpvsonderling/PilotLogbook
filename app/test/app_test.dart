@@ -45,6 +45,14 @@ void main() {
     // Pick the suggestion, which also closes the suggestion list.
     await tester.tap(find.text('Fiona Pickup').last);
     await tester.pumpAndSettle();
+    // Aborted / Near miss are picked in What too, after a comma.
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'What'),
+      'Fiona Pickup, nea',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fiona Pickup, Near miss').last);
+    await tester.pumpAndSettle();
     final rp = find.widgetWithText(DropdownButtonFormField<String?>, 'RP');
     await tester.ensureVisible(rp);
     await tester.pumpAndSettle();
@@ -52,10 +60,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Pavlo Yavorskyi').last);
     await tester.pumpAndSettle();
-    final nearMiss = find.text('Near miss');
-    await tester.ensureVisible(nearMiss);
-    await tester.pumpAndSettle();
-    await tester.tap(nearMiss);
     await tester.tap(find.byKey(const Key('save-flight')));
     await tester.pumpAndSettle();
 
