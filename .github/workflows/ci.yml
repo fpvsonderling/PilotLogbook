@@ -111,16 +111,20 @@ jobs:
   ios:
     runs-on: macos-latest
     needs: test
+    env:
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.8
           channel: stable
-      # Unsigned for now: installing on an iPhone needs an Apple signature
-      # (TestFlight with a developer account, or a sideloading tool that
-      # signs it with the user's own Apple ID).
+      # Without the App Store Connect secrets the app is built unsigned, which
+      # only proves it compiles: an iPhone installs nothing Apple has not signed.
       - name: Build iOS app (unsigned)
+        if: env.APPSTORE_KEY_ID == ''
         working-directory: app
         run: |
           flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
@@ -128,6 +132,50 @@ jobs:
           cp -R build/ios/iphoneos/Runner.app Payload/
           zip -qry PilotLogbook-unsigned.ipa Payload
       - uses: actions/upload-artifact@v4
+        if: env.APPSTORE_KEY_ID == ''
         with:
           name: PilotLogbook-ios-unsigned
           path: app/PilotLogbook-unsigned.ipa
+      # With them, Xcode signs in the cloud with the App Store Connect API key
+      # (no certificates or profiles kept here) and, outside pull requests,
+      # uploads the build to TestFlight.
+      - name: App Store Connect key
+        if: env.APPSTORE_KEY_ID != ''
+        env:
+          APPSTORE_KEY: ${{ secrets.APPSTORE_KEY }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$APPSTORE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
+          printf 'DEVELOPMENT_TEAM=%s\nCODE_SIGN_STYLE=Automatic\n' "$APPLE_TEAM_ID" >> app/ios/Flutter/Release.xcconfig
+      - name: Build and sign iOS app
+        if: env.APPSTORE_KEY_ID != ''
+        working-directory: app
+        run: |
+          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          auth=(-allowProvisioningUpdates
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_KEY_ID.p8
+            -authenticationKeyID "$APPSTORE_KEY_ID"
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID")
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner \
+            -configuration Release -sdk iphoneos -destination generic/platform=iOS \
+            -archivePath build/Runner.xcarchive archive CODE_SIGNING_ALLOWED=NO
+          destination=export
+          if [ "${{ github.event_name }}" != pull_request ]; then destination=upload; fi
+          cat > ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>$destination</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/Runner.xcarchive \
+            -exportOptionsPlist ExportOptions.plist -exportPath build/ipa "${auth[@]}"
+      - uses: actions/upload-artifact@v4
+        if: env.APPSTORE_KEY_ID != '' && github.event_name == 'pull_request'
+        with:
+          name: PilotLogbook-ios
+          path: app/build/ipa/*.ipa
