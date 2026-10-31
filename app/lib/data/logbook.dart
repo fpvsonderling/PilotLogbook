@@ -50,12 +50,44 @@ class DailyCheck {
   ];
 }
 
-class PilotStat {
-  const PilotStat(this.personId, this.name, this.flights, this.seconds);
-  final String personId;
+/// Flights, flight time, aborted missions and near misses of one group:
+/// a pilot, a project, a drone, a month...
+class FlightStat {
+  const FlightStat(
+    this.id,
+    this.name, {
+    required this.flights,
+    required this.seconds,
+    this.aborted = 0,
+    this.nearMisses = 0,
+  });
+  final String id;
   final String name;
   final int flights;
   final int seconds;
+  final int aborted;
+  final int nearMisses;
+
+  /// Average flight time, or null when no flight has a time.
+  int? get averageSeconds => flights == 0 ? null : seconds ~/ flights;
+}
+
+/// Figures over all flights for the top of the Statistic page.
+class FlightTotals {
+  const FlightTotals({
+    required this.all,
+    required this.days,
+    required this.longestSeconds,
+    required this.firstDate,
+    required this.lastDate,
+  });
+  final FlightStat all;
+
+  /// Days with at least one flight.
+  final int days;
+  final int longestSeconds;
+  final String? firstDate;
+  final String? lastDate;
 }
 
 /// Queries the screens need, on top of [LocalDb].
@@ -126,24 +158,99 @@ class Logbook {
   ];
 
   /// Flights and flight time per remote pilot (RP), most flights first.
-  List<PilotStat> pilotStats() => _stats('rp_id', withTime: true);
+  List<FlightStat> pilotStats() => _stats(
+    'f.rp_id',
+    join: 'JOIN people g ON g.id = f.rp_id',
+    name: 'g.name',
+  );
 
   /// Flights per spotter.
-  List<PilotStat> spotterStats() => _stats('spotter_id', withTime: false);
+  List<FlightStat> spotterStats() => _stats(
+    'f.spotter_id',
+    join: 'JOIN people g ON g.id = f.spotter_id',
+    name: 'g.name',
+  );
 
-  List<PilotStat> _stats(String column, {required bool withTime}) => [
+  /// Per project; flights without one are under "No project".
+  List<FlightStat> projectStats() => _stats(
+    "COALESCE(f.project_id, '')",
+    join: 'LEFT JOIN projects g ON g.id = f.project_id',
+    name: "COALESCE(g.name, 'No project')",
+  );
+
+  /// Per drone.
+  List<FlightStat> droneStats() => _stats(
+    "COALESCE(f.aircraft_id, '')",
+    join: 'LEFT JOIN aircraft g ON g.id = f.aircraft_id',
+    name: "COALESCE(g.name, 'No drone')",
+  );
+
+  /// Cargo and inspection flights.
+  List<FlightStat> kindStats() => _stats(
+    "COALESCE(f.kind, '')",
+    name: "COALESCE(NULLIF(f.kind, ''), 'Other')",
+  );
+
+  /// Per month (yyyy-MM), newest first.
+  List<FlightStat> monthStats() => _stats(
+    'substr(f.date, 1, 7)',
+    name: 'substr(f.date, 1, 7)',
+    where: "f.date LIKE '____-__%'",
+    orderBy: 'name DESC',
+  );
+
+  FlightTotals totals() {
+    final r = db
+        .select(
+          'SELECT COUNT(*) AS n, COALESCE(SUM(duration_s), 0) AS s, '
+          'COALESCE(SUM(aborted = 1), 0) AS a, '
+          'COALESCE(SUM(near_miss = 1), 0) AS m, '
+          "COUNT(DISTINCT NULLIF(date, '')) AS d, "
+          'COALESCE(MAX(duration_s), 0) AS l, '
+          "MIN(NULLIF(date, '')) AS first, MAX(NULLIF(date, '')) AS last "
+          'FROM flights WHERE deleted = 0',
+        )
+        .single;
+    return FlightTotals(
+      all: FlightStat(
+        '',
+        'All',
+        flights: r['n'] as int,
+        seconds: r['s'] as int,
+        aborted: r['a'] as int,
+        nearMisses: r['m'] as int,
+      ),
+      days: r['d'] as int,
+      longestSeconds: r['l'] as int,
+      firstDate: r['first'] as String?,
+      lastDate: r['last'] as String?,
+    );
+  }
+
+  /// Flights grouped by the SQL expression [key], most flights first.
+  List<FlightStat> _stats(
+    String key, {
+    String join = '',
+    required String name,
+    String? where,
+    String orderBy = 'n DESC, name',
+  }) => [
     for (final r in db.select(
-      'SELECT p.id, p.name, COUNT(f.id) AS n, '
-      'COALESCE(SUM(f.duration_s), 0) AS s '
-      'FROM flights f JOIN people p ON p.id = f.$column '
-      'WHERE f.deleted = 0 '
-      'GROUP BY p.id ORDER BY n DESC, p.name',
+      'SELECT $key AS k, $name AS name, COUNT(f.id) AS n, '
+      'COALESCE(SUM(f.duration_s), 0) AS s, '
+      'COALESCE(SUM(f.aborted = 1), 0) AS a, '
+      'COALESCE(SUM(f.near_miss = 1), 0) AS m '
+      'FROM flights f $join '
+      'WHERE f.deleted = 0${where == null ? '' : ' AND $where'} '
+      'GROUP BY k ORDER BY $orderBy',
     ))
-      PilotStat(
-        r['id'] as String,
+      FlightStat(
+        r['k'] as String,
         (r['name'] as String?) ?? '',
-        r['n'] as int,
-        withTime ? r['s'] as int : 0,
+        flights: r['n'] as int,
+        seconds: r['s'] as int,
+        aborted: r['a'] as int,
+        nearMisses: r['m'] as int,
       ),
   ];
 }

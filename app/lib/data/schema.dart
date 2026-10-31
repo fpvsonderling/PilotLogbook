@@ -88,6 +88,9 @@ class Tables {
     Col('pa_id'),
     Col('spotter_id'),
     Col('notes'),
+    // 1 when the mission was aborted / there was a near miss, else empty.
+    Col('aborted', ColType.integer),
+    Col('near_miss', ColType.integer),
   ]);
 
   static const checklistTemplates = TableDef('checklist_templates', [
