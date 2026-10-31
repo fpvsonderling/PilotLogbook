@@ -50,6 +50,38 @@ class DailyCheck {
   ];
 }
 
+/// Tags in a flight's "What" (mission) field, which lists them comma
+/// separated as in AppSheet: "Double, Aborted", "Sandra Delivery, Near miss".
+/// The aborted / near_miss columns are kept in step with them.
+enum MissionTag {
+  aborted('Aborted', 'aborted', '%abort%'),
+  nearMiss('Near miss', 'near_miss', '%near%miss%');
+
+  const MissionTag(this.label, this.column, this._like);
+  final String label;
+  final String column;
+  final String _like;
+
+  RegExp get _pattern =>
+      RegExp(_like.replaceAll('%', '.*'), caseSensitive: false);
+
+  bool isIn(String? mission) => _pattern.hasMatch(mission ?? '');
+
+  /// [mission] with this tag added or taken out.
+  String setIn(String mission, bool on) {
+    final parts = [
+      for (final p in mission.split(','))
+        if (p.trim().isNotEmpty && !_pattern.hasMatch(p)) p.trim(),
+    ];
+    if (on) parts.add(label);
+    return parts.join(', ');
+  }
+
+  /// SQL: the flight [f] has the tag, by its column or its What field.
+  String sql(String f) =>
+      "($f.$column = 1 OR LOWER(COALESCE($f.mission, '')) LIKE '$_like')";
+}
+
 /// Flights, flight time, aborted missions and near misses of one group:
 /// a pilot, a project, a drone, a month...
 class FlightStat {
@@ -247,12 +279,12 @@ class Logbook {
     final r = db
         .select(
           'SELECT COUNT(*) AS n, COALESCE(SUM(duration_s), 0) AS s, '
-          'COALESCE(SUM(aborted = 1), 0) AS a, '
-          'COALESCE(SUM(near_miss = 1), 0) AS m, '
+          'COALESCE(SUM(${MissionTag.aborted.sql('f')}), 0) AS a, '
+          'COALESCE(SUM(${MissionTag.nearMiss.sql('f')}), 0) AS m, '
           "COUNT(DISTINCT NULLIF(date, '')) AS d, "
           'COALESCE(MAX(duration_s), 0) AS l, '
           "MIN(NULLIF(date, '')) AS first, MAX(NULLIF(date, '')) AS last "
-          'FROM flights WHERE deleted = 0',
+          'FROM flights f WHERE deleted = 0',
         )
         .single;
     return FlightTotals(
@@ -282,8 +314,8 @@ class Logbook {
     for (final r in db.select(
       'SELECT $key AS k, $name AS name, COUNT(f.id) AS n, '
       'COALESCE(SUM(f.duration_s), 0) AS s, '
-      'COALESCE(SUM(f.aborted = 1), 0) AS a, '
-      'COALESCE(SUM(f.near_miss = 1), 0) AS m '
+      'COALESCE(SUM(${MissionTag.aborted.sql('f')}), 0) AS a, '
+      'COALESCE(SUM(${MissionTag.nearMiss.sql('f')}), 0) AS m '
       'FROM flights f $join '
       'WHERE f.deleted = 0${where == null ? '' : ' AND $where'} '
       'GROUP BY k ORDER BY $orderBy',
