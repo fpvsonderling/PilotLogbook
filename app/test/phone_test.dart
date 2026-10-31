@@ -133,4 +133,63 @@ void main() {
     await tester.pumpAndSettle();
     expect(db.rows(Tables.dailyChecksFb3).single['storage'], 'Ok');
   });
+
+  testWidgets('Statistic fills the phone width with two tiles a row', (
+    tester,
+  ) async {
+    phone(tester);
+    final db = LocalDb.inMemory();
+    final project = db.save(Tables.projects, {'name': 'Statkraft'});
+    final pavlo = db.save(Tables.people, {'name': 'Pavlo', 'roles': 'pilot'});
+    for (final (date, aborted) in [
+      ('2026-09-30', 0),
+      ('2026-10-01', 1),
+      ('2026-10-02', 0),
+    ]) {
+      db.save(Tables.flights, {
+        'date': date,
+        'kind': 'cargo',
+        'project_id': project,
+        'rp_id': pavlo,
+        'duration_s': 300,
+        'aborted': aborted,
+      });
+    }
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await open(tester, 'Statistic');
+    expect(tester.takeException(), isNull);
+
+    final flights = tester.getRect(
+      find.ancestor(
+        of: find.text('Flights').first,
+        matching: find.byType(Card),
+      ),
+    );
+    final time = tester.getRect(
+      find.ancestor(of: find.text('Flight time'), matching: find.byType(Card)),
+    );
+    final screen =
+        tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    // Side by side, together nearly the full width.
+    expect(time.top, flights.top);
+    expect(time.right, greaterThan(screen - 20));
+    expect(flights.width, greaterThan(screen / 2 - 20));
+
+    expect(find.byKey(const Key('export-pdf')), findsOneWidget);
+    expect(find.byKey(const Key('filter-project')), findsOneWidget);
+    expect(find.byKey(const Key('filter-search')), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('Last 12 months'),
+      300,
+      scrollable: find
+          .byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+          )
+          .last,
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('1 aborted', findRichText: true), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
 }
