@@ -60,7 +60,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final flight = db.rows(Tables.flights).single;
-    expect(flight['mission'], 'Fiona Pickup');
+    expect(flight['mission'], 'Fiona Pickup, Near miss');
     expect(flight['kind'], 'cargo');
     expect(flight['duration_s'], 210);
     expect(flight['battery_id'], battery);

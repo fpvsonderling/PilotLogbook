@@ -69,6 +69,12 @@ class _FlightFormState extends State<FlightForm> {
   void initState() {
     super.initState();
     _v['date'] ??= _dateFormat.format(DateTime.now());
+    // Flights ticked before the tick boxes wrote to What.
+    for (final t in MissionTag.values) {
+      if (_v[t.column] == 1 && !t.isIn(_mission.text)) {
+        _mission.text = t.setIn(_mission.text, true);
+      }
+    }
   }
 
   @override
@@ -92,6 +98,8 @@ class _FlightFormState extends State<FlightForm> {
       'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
       'temp_c': int.tryParse(_temp.text.trim()),
       'mission': _mission.text.trim(),
+      for (final t in MissionTag.values)
+        t.column: t.isIn(_mission.text) ? 1 : null,
       'notes': _notes.text.trim(),
     });
     Navigator.of(context).pop();
@@ -241,8 +249,16 @@ class _FlightFormState extends State<FlightForm> {
                   maxLines: 3,
                 ),
                 const SizedBox(height: 8),
-                _flag('Mission aborted', 'aborted'),
-                _flag('Near miss', 'near_miss'),
+                // Ticking adds the word to What, as in the old app.
+                ListenableBuilder(
+                  listenable: _mission,
+                  builder: (context, _) => Column(
+                    children: [
+                      _flag('Mission aborted', MissionTag.aborted),
+                      _flag('Near miss', MissionTag.nearMiss),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -251,12 +267,12 @@ class _FlightFormState extends State<FlightForm> {
     );
   }
 
-  Widget _flag(String label, String key) => CheckboxListTile(
+  Widget _flag(String label, MissionTag tag) => CheckboxListTile(
     contentPadding: EdgeInsets.zero,
     controlAffinity: ListTileControlAffinity.leading,
     title: Text(label),
-    value: _v[key] == 1,
-    onChanged: (v) => setState(() => _v[key] = v == true ? 1 : null),
+    value: tag.isIn(_mission.text),
+    onChanged: (v) => _mission.text = tag.setIn(_mission.text, v == true),
   );
 
   Widget _number(

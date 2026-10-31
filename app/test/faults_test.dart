@@ -126,10 +126,7 @@ void main() {
     expect(phone.lastError, isNull);
     expect(sheets.uploads, 1);
     expect(sheets.drive.values.single, base64Encode([1, 2, 3]));
-    expect(
-      sheets.tables['fault_photos']![photo]!['drive_file_id'],
-      'drive-1',
-    );
+    expect(sheets.tables['fault_photos']![photo]!['drive_file_id'], 'drive-1');
     expect(phone.photos!.pendingUploads(phone.db), isEmpty);
 
     // A second sync sends nothing again.
