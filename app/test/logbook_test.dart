@@ -14,6 +14,50 @@ void main() {
     expect(flightSeconds(null, '13:00:00'), isNull);
   });
 
+  test('each logbook offers its own drones, and a drone its batteries', () {
+    final db = LocalDb.inMemory();
+    final logbook = Logbook(db);
+    final fb3 = db.save(Tables.aircraft, {
+      'name': '18',
+      'active': 1,
+      'usage': 'cargo',
+    });
+    final m30 = db.save(Tables.aircraft, {
+      'name': 'Matrice 30T',
+      'active': 1,
+      'usage': 'inspection',
+    });
+    // From before the usage column: in both logbooks.
+    final old = db.save(Tables.aircraft, {'name': '24', 'active': 1});
+    expect(logbook.dronesFor('cargo').keys, unorderedEquals([fb3, old]));
+    expect(logbook.dronesFor('inspection').keys, unorderedEquals([m30, old]));
+    expect(logbook.dronesFor('inspection', keep: fb3).keys, contains(fb3));
+
+    final b45 = db.save(Tables.batteries, {
+      'name': '45',
+      'active': 1,
+      'aircraft_ids': fb3,
+    });
+    final b46 = db.save(Tables.batteries, {
+      'name': '46',
+      'active': 1,
+      'aircraft_ids': '$fb3,$old',
+    });
+    final any = db.save(Tables.batteries, {'name': '99', 'active': 1});
+    expect(logbook.batteriesFor(fb3).keys, unorderedEquals([b45, b46, any]));
+    expect(logbook.batteriesFor(old).keys, unorderedEquals([b46, any]));
+    expect(logbook.batteriesFor(null).keys, hasLength(3));
+  });
+
+  test('drone usage reads and writes the usage column', () {
+    expect(DroneUsage.of(''), DroneUsage.values.toSet());
+    expect(DroneUsage.of('inspection'), {DroneUsage.inspection});
+    expect(
+      DroneUsage.format({DroneUsage.inspection, DroneUsage.cargo}),
+      'cargo,inspection',
+    );
+  });
+
   test('duration format matches the old app', () {
     expect(formatDuration(210), '0:03:30');
     expect(formatDuration(87 * 3600 + 16 * 60), '87:16:00');

@@ -55,6 +55,9 @@ class Tables {
     Col('model'),
     Col('serial'),
     Col('active', ColType.integer),
+    // What the drone flies: "cargo", "inspection" or "cargo,inspection".
+    // Empty (drones from before) counts as both. See DroneUsage.
+    Col('usage'),
   ]);
 
   static const batteries = TableDef('batteries', [
@@ -62,6 +65,8 @@ class Tables {
     Col('set_name'),
     Col('serial'),
     Col('active', ColType.integer),
+    // Drones the battery goes in, comma separated ids; empty = any drone.
+    Col('aircraft_ids'),
   ]);
 
   static const missionTypes = TableDef('mission_types', [
@@ -196,6 +201,23 @@ class Tables {
     Col('url'),
   ]);
 
+  // Maintenance: one row per maintenance of a drone, one column per
+  // assembly with "Checked" or what was done (see maintenance.dart), like
+  // the old AppSheet "Maintenance" sheet.
+  static const maintenance = TableDef('maintenance', [
+    Col('performed_at'), // yyyy-MM-dd HH:mm:ss, local time
+    Col('aircraft_id'),
+    Col('technician_id'),
+    Col('arm_assembly'),
+    Col('center_plate'),
+    Col('propulsion_system'),
+    Col('load_assembly'),
+    Col('leg_assembly'),
+    Col('power_system'),
+    Col('fts'),
+    Col('notes'),
+  ]);
+
   static const torqueSpecs = TableDef('torque_specs', [
     Col('model'),
     Col('component'),
@@ -226,6 +248,7 @@ class Tables {
     faultRepairs,
     faultSignoffs,
     faultPhotos,
+    maintenance,
     torqueSpecs,
     documents,
   ];

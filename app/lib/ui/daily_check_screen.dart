@@ -420,8 +420,8 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
                               ? 'Pick the pilot'
                               : '$done / ${sections.length} sections',
                           style: const TextStyle(
-                            fontFamily: 'Barlow Condensed',
-                            fontSize: 22,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
@@ -495,11 +495,7 @@ class _Chips extends StatelessWidget {
                 e.value,
                 textAlign: TextAlign.center,
                 style: mono
-                    ? const TextStyle(
-                        fontFamily: 'Barlow',
-                        fontSize: 19,
-                        fontWeight: FontWeight.w700,
-                      )
+                    ? const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)
                     : null,
               ),
             ),
@@ -785,8 +781,8 @@ class _ResultButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const text = TextStyle(
-      fontFamily: 'Barlow',
-      fontSize: 17,
+      fontFamily: 'Inter',
+      fontSize: 16,
       fontWeight: FontWeight.w700,
     );
     const size = Size(0, 52);

@@ -476,3 +476,66 @@ test('syncReleases copies a new release to Drive in pieces, over the old files',
   ctx.syncReleases();
   assert.ok(calls.some(([m, u]) => m === 'patch' && u.includes('/files/drive-1?')));
 });
+
+test('old AppSheet maintenance rows become maintenance rows', () => {
+  const { ctx, sheets, post, oldSheets } = load();
+  post({ action: 'sync', push: { aircraft: [{ id: 'd18', updated_at: 't', deleted: 0, name: '18' }] }, since: {} });
+  oldSheets['1pLX_T4Vdv_4bP-69eEmOdRy2OjZrFRSuHPInY9CEbtA'] = [
+    ['Timestamp', '*ID', 'Dron number', 'Arm Assembly ', 'Center Plate ', 'Propulsion System', ' Load Assembly', 'Leg Assembly', 'Power System ', 'FTS'],
+    ['25/03/2026 19:21:00', '1', '24', 'Checked', 'Checked', 'Checked', 'Checked', 'Checked', 'Checked', ''],
+    ['07/08/2026 10:48:45', '4', '18', 'Replaced 3 propellers.', '', '', '', '', 'Fixed gcs charging issue', ''],
+    ['', '', '', '', '', '', '', '', '', ''],
+  ];
+  assert.strictEqual(ctx.importOldMaintenance(), 2);
+  const rows = rowsOf(sheets.maintenance);
+  const a = rows.find((r) => r.id === 'import-maintenance-4');
+  assert.strictEqual(a.performed_at, '2026-08-07 10:48:45');
+  assert.strictEqual(a.aircraft_id, 'd18');
+  assert.strictEqual(a.arm_assembly, 'Replaced 3 propellers.');
+  assert.strictEqual(a.power_system, 'Fixed gcs charging issue');
+  assert.strictEqual(a.center_plate, '');
+  const b = rows.find((r) => r.id === 'import-maintenance-1');
+  assert.strictEqual(b.performed_at, '2026-03-25 19:21:00');
+  assert.strictEqual(b.leg_assembly, 'Checked');
+  // Drone 24 was missing and is added.
+  assert.ok(sheets.aircraft.cells.some((r) => r.includes('24')));
+  ctx.importOldMaintenance();
+  assert.strictEqual(sheets.maintenance.cells.length, 3);
+});
+
+test('Inspection LogBook rows become inspection flights; drones get their usage', () => {
+  const { ctx, sheets, post, oldSheets } = load();
+  post({ action: 'sync', push: {
+    aircraft: [{ id: 'd18', updated_at: '2026-10-30T10:00:00.000Z', deleted: 0, name: '18', active: 1 }],
+    people: [{ id: 'p-marcel', updated_at: 't', deleted: 0, name: 'Marcel Jaworski', roles: 'pilot', active: 1 }],
+  }, since: {} });
+  oldSheets['1lvmAEMN34PAOrhTQ4FVdwH2R-I6y8jvoy0JpCZ72fSw'] = [
+    ['id', 'Date', 'Project', 'Dron №', 'TakeOff', 'Land', 'Time', 'RP', 'PA', 'NOTES'],
+    ['1', '08/10/2026', 'Dogger Bank', ' Matrice 30T', '03:14:15', '03:25:00', '00:10:45', 'Marcel Jaworski', 'Andy Grimes', 'T05 TEST'],
+    ['3', '12.10.2026', 'Dogger Bank', 'Matrice 30T', '14:47:03', '14:47:05', '00:00:02', 'Andy Grimes', 'Marcel Jaworski', 'Test'],
+    ['', '', '', '', '', '', '00:00:00', '', '', ''],
+  ];
+  assert.strictEqual(ctx.importInspectionLogbook(), 2);
+  const flights = rowsOf(sheets.flights);
+  const a = flights.find((r) => r.id === 'import-inspection-1');
+  assert.strictEqual(a.kind, 'inspection');
+  assert.strictEqual(a.date, '2026-10-08');
+  assert.strictEqual(a.duration_s, '645');
+  assert.strictEqual(a.rp_id, 'p-marcel');
+  assert.strictEqual(a.notes, 'T05 TEST');
+  assert.strictEqual(flights.find((r) => r.id === 'import-inspection-3').date, '2026-10-12');
+  const drones = rowsOf(sheets.aircraft);
+  const m30 = drones.find((r) => r.name === 'Matrice 30T');
+  assert.strictEqual(m30.usage, 'inspection');
+  assert.strictEqual(a.aircraft_id, m30.id);
+  assert.strictEqual(drones.find((r) => r.id === 'd18').usage, 'cargo');
+  assert.strictEqual(drones.find((r) => r.id === 'd18').name, '18');
+  const andy = rowsOf(sheets.people).find((r) => r.name === 'Andy Grimes');
+  assert.strictEqual(a.pa_id, andy.id);
+  assert.strictEqual(rowsOf(sheets.projects).length, 1);
+  // A rerun adds nothing new.
+  ctx.importInspectionLogbook();
+  assert.strictEqual(rowsOf(sheets.flights).length, 2);
+  assert.strictEqual(rowsOf(sheets.aircraft).length, 2);
+  assert.strictEqual(rowsOf(sheets.people).length, 2);
+});

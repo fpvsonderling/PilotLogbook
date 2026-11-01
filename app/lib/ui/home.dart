@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'daily_checks_page.dart';
 import 'faults_page.dart';
 import 'flights_page.dart';
+import 'maintenance_page.dart';
 import 'nm_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
 import 'settings_page.dart';
 import 'stats_page.dart';
+import 'theme.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -24,6 +26,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.search, 'Inspection LogBook'),
     (Icons.checklist, 'Daily checks'),
     (Icons.handyman, 'Fault Repair'),
+    (Icons.engineering, 'Maintenance'),
     (Icons.bar_chart, 'Statistic'),
     (Icons.list_alt, 'Reference data'),
     (Icons.build, 'Nm'),
@@ -35,9 +38,10 @@ class _HomePageState extends State<HomePage> {
     1 => const FlightsPage(kind: 'inspection', title: 'Inspection LogBook'),
     2 => const DailyChecksPage(),
     3 => const FaultsPage(),
-    4 => const StatsPage(),
-    5 => const ReferencePage(),
-    6 => const NmPage(),
+    4 => const MaintenancePage(),
+    5 => const StatsPage(),
+    6 => const ReferencePage(),
+    7 => const NmPage(),
     _ => const SettingsPage(),
   };
 
@@ -134,7 +138,34 @@ class SyncButton extends StatelessWidget {
                         ? Icons.cloud_off
                         : Icons.sync,
                   ),
-            label: Text(pending > 0 ? 'Sync ($pending)' : 'Sync'),
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Sync'),
+                if (pending > 0) ...[
+                  const SizedBox(width: 6),
+                  // Gold count of changes still waiting for upload.
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppPalette.gold,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$pending',
+                      style: const TextStyle(
+                        color: AppPalette.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         );
       },

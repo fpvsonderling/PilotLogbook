@@ -64,6 +64,10 @@ class _FlightFormState extends State<FlightForm> {
 
   String? _text(String key) => _v[key]?.toString();
 
+  /// Inspection flights keep only what the Inspection LogBook sheet has:
+  /// date, project, drone, take off, land, time, RP, PA and notes.
+  bool get _cargo => widget.kind != 'inspection';
+
   @override
   void initState() {
     super.initState();
@@ -91,11 +95,13 @@ class _FlightFormState extends State<FlightForm> {
       'takeoff_at': _takeoff.text.trim(),
       'landing_at': _landing.text.trim(),
       'duration_s': flightSeconds(_takeoff.text, _landing.text),
-      'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
-      'temp_c': int.tryParse(_temp.text.trim()),
-      'mission': _what.join(', '),
-      for (final t in MissionTag.values)
-        t.column: _what.contains(t.label) ? 1 : null,
+      if (_cargo) ...{
+        'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
+        'temp_c': int.tryParse(_temp.text.trim()),
+        'mission': _what.join(', '),
+        for (final t in MissionTag.values)
+          t.column: _what.contains(t.label) ? 1 : null,
+      },
       'notes': _notes.text.trim(),
     });
     Navigator.of(context).pop();
@@ -181,11 +187,23 @@ class _FlightFormState extends State<FlightForm> {
                   value: _v['project_id'] as String?,
                   onChanged: (id) => setState(() => _v['project_id'] = id),
                 ),
+                // Only drones marked for this logbook under Reference data.
                 _ChoiceField(
                   label: 'Drone',
-                  options: logbook.names(Tables.aircraft, activeOnly: true),
+                  options: logbook.dronesFor(
+                    widget.kind,
+                    keep: widget.flight?['aircraft_id'] as String?,
+                  ),
                   value: _v['aircraft_id'] as String?,
-                  onChanged: (id) => setState(() => _v['aircraft_id'] = id),
+                  onChanged: (id) => setState(() {
+                    _v['aircraft_id'] = id;
+                    // A battery of another drone is taken off.
+                    if (!logbook
+                        .batteriesFor(id)
+                        .containsKey(_v['battery_id'])) {
+                      _v['battery_id'] = null;
+                    }
+                  }),
                 ),
                 _TimeField(
                   label: 'Take off',
@@ -197,40 +215,47 @@ class _FlightFormState extends State<FlightForm> {
                   controller: _landing,
                   now: () => _timeFormat.format(DateTime.now()),
                 ),
-                _ChoiceField(
-                  label: 'Battery',
-                  options: logbook.names(Tables.batteries, activeOnly: true),
-                  value: _v['battery_id'] as String?,
-                  onChanged: (id) => setState(() => _v['battery_id'] = id),
-                ),
-                Row(
-                  children: [
-                    Expanded(child: _number('Used', _used, decimal: true)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _number('Temp °C', _temp)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // Several can be picked, e.g. Double and Aborted; saved
-                // comma separated as in AppSheet: "Double, Aborted".
-                _MultiChoiceField(
-                  label: 'What',
-                  options: [
-                    // Old flights may name things no longer in the list.
-                    for (final p in _what)
-                      if (!missions.contains(p) &&
-                          !MissionTag.values.any((t) => t.label == p))
-                        p,
-                    ...missions,
-                    for (final t in MissionTag.values) t.label,
-                  ],
-                  value: _what,
-                  onChanged: (v) => setState(() {
-                    _what
-                      ..clear()
-                      ..addAll(v);
-                  }),
-                ),
+                if (_cargo) ...[
+                  // The batteries of the chosen drone; rebuilt when it changes.
+                  _ChoiceField(
+                    key: ValueKey('battery-${_v['aircraft_id']}'),
+                    label: 'Battery',
+                    options: logbook.batteriesFor(
+                      _v['aircraft_id'] as String?,
+                      keep: _v['battery_id'] as String?,
+                    ),
+                    value: _v['battery_id'] as String?,
+                    onChanged: (id) => setState(() => _v['battery_id'] = id),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(child: _number('Used', _used, decimal: true)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _number('Temp °C', _temp)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Several can be picked, e.g. Double and Aborted; saved
+                  // comma separated as in AppSheet: "Double, Aborted".
+                  _MultiChoiceField(
+                    label: 'What',
+                    options: [
+                      // Old flights may name things no longer in the list.
+                      for (final p in _what)
+                        if (!missions.contains(p) &&
+                            !MissionTag.values.any((t) => t.label == p))
+                          p,
+                      ...missions,
+                      for (final t in MissionTag.values) t.label,
+                    ],
+                    value: _what,
+                    onChanged: (v) => setState(() {
+                      _what
+                        ..clear()
+                        ..addAll(v);
+                    }),
+                  ),
+                ],
                 _person(
                   'RP',
                   'rp_id',
@@ -238,11 +263,12 @@ class _FlightFormState extends State<FlightForm> {
                   required: true,
                 ),
                 _person('PA', 'pa_id', logbook.peopleWithRole('pilot')),
-                _person(
-                  'Spotter',
-                  'spotter_id',
-                  logbook.peopleWithRole('spotter'),
-                ),
+                if (_cargo)
+                  _person(
+                    'Spotter',
+                    'spotter_id',
+                    logbook.peopleWithRole('spotter'),
+                  ),
                 TextFormField(
                   controller: _notes,
                   decoration: const InputDecoration(labelText: 'Notes'),
@@ -326,6 +352,7 @@ class _DateField extends StatelessWidget {
 /// A row of buttons, like the project and drone pickers in AppSheet.
 class _ChoiceField extends FormField<String> {
   _ChoiceField({
+    super.key,
     required String label,
     required Map<String, String> options,
     required String? value,
