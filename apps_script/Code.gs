@@ -34,6 +34,7 @@ const SCHEMA = {
   fault_repairs: ['fault_id', 'started_at', 'finished_at', 'technicians', 'work_performed', 'materials_used', 'notes'],
   fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
   fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
+  maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   documents: ['title', 'url', 'notes'],
 };
@@ -670,6 +671,58 @@ function findPhoto_(path) {
   if (!it.hasNext()) return null;
   const file = it.next();
   return { id: file.getId(), url: file.getUrl() };
+}
+
+// ---------------------------------------------- old maintenance import
+
+const OLD_MAINTENANCE = '1pLX_T4Vdv_4bP-69eEmOdRy2OjZrFRSuHPInY9CEbtA';
+
+// Old AppSheet columns, in order after Timestamp, *ID and Dron number.
+const OLD_MAINTENANCE_COLUMNS = ['arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts'];
+
+/**
+ * Run once from the editor: copies the old AppSheet "Maintenance" sheet into
+ * the maintenance tab. The old sheet is only read. Safe to rerun: rows keep
+ * the same ids and are overwritten, unless they were edited in the app since.
+ */
+function importOldMaintenance(spreadsheetId) {
+  const sheet = SpreadsheetApp.openById(spreadsheetId || OLD_MAINTENANCE).getSheets()[0];
+  const out = buildImportedMaintenance_(sheet.getDataRange().getDisplayValues(), aircraftIds_());
+  const res = sync_({ push: { aircraft: out.aircraft, maintenance: out.rows }, since: {} }, { admin: true, me: '' });
+  Logger.log('Imported ' + res.accepted.maintenance.length + ' maintenance rows, ' + out.aircraft.length + ' new drones.');
+  return res.accepted.maintenance.length;
+}
+
+/** Old sheet rows (header first) -> maintenance rows. */
+function buildImportedMaintenance_(rows, aircraftIds) {
+  const updatedAt = '2026-11-01T00:00:00.000Z';
+  const aircraft = [];
+  const out = [];
+  rows.slice(1).forEach(function (r) {
+    const at = anyTimestamp_(r[0]);
+    const drone = String(r[2] === undefined ? '' : r[2]).trim();
+    if (!at || !drone) return;
+    if (!aircraftIds[drone]) {
+      aircraftIds[drone] = 'import-aircraft-' + drone;
+      aircraft.push({ id: aircraftIds[drone], updated_at: updatedAt, deleted: 0, name: drone, active: 1 });
+    }
+    const oldId = String(r[1] === undefined ? '' : r[1]).trim();
+    const row = {
+      id: 'import-maintenance-' + (oldId || drone + '-' + at.replace(/\D/g, '')),
+      updated_at: updatedAt,
+      deleted: 0,
+      performed_at: at,
+      aircraft_id: aircraftIds[drone],
+      technician_id: '',
+      notes: 'Imported from the old AppSheet table',
+    };
+    OLD_MAINTENANCE_COLUMNS.forEach(function (c, i) {
+      const v = String(r[i + 3] === undefined ? '' : r[i + 3]).trim();
+      row[c] = v.toLowerCase() === 'checked' ? 'Checked' : v;
+    });
+    out.push(row);
+  });
+  return { rows: out, aircraft: aircraft };
 }
 
 // ----------------------------------------------------------------- backup

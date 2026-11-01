@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'daily_checks_page.dart';
 import 'faults_page.dart';
 import 'flights_page.dart';
+import 'maintenance_page.dart';
 import 'nm_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
@@ -24,6 +25,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.search, 'Inspection LogBook'),
     (Icons.checklist, 'Daily checks'),
     (Icons.handyman, 'Fault Repair'),
+    (Icons.engineering, 'Maintenance'),
     (Icons.bar_chart, 'Statistic'),
     (Icons.list_alt, 'Reference data'),
     (Icons.build, 'Nm'),
@@ -35,9 +37,10 @@ class _HomePageState extends State<HomePage> {
     1 => const FlightsPage(kind: 'inspection', title: 'Inspection LogBook'),
     2 => const DailyChecksPage(),
     3 => const FaultsPage(),
-    4 => const StatsPage(),
-    5 => const ReferencePage(),
-    6 => const NmPage(),
+    4 => const MaintenancePage(),
+    5 => const StatsPage(),
+    6 => const ReferencePage(),
+    7 => const NmPage(),
     _ => const SettingsPage(),
   };
 

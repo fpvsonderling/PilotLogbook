@@ -411,3 +411,29 @@ test('a photo is sent back only when fault_photos lists it', () => {
   assert.strictEqual(out.ok, true);
   assert.strictEqual(out.data, 'bytes-of-f1');
 });
+
+test('old AppSheet maintenance rows become maintenance rows', () => {
+  const { ctx, sheets, post, oldSheets } = load();
+  post({ action: 'sync', push: { aircraft: [{ id: 'd18', updated_at: 't', deleted: 0, name: '18' }] }, since: {} });
+  oldSheets['1pLX_T4Vdv_4bP-69eEmOdRy2OjZrFRSuHPInY9CEbtA'] = [
+    ['Timestamp', '*ID', 'Dron number', 'Arm Assembly ', 'Center Plate ', 'Propulsion System', ' Load Assembly', 'Leg Assembly', 'Power System ', 'FTS'],
+    ['25/03/2026 19:21:00', '1', '24', 'Checked', 'Checked', 'Checked', 'Checked', 'Checked', 'Checked', ''],
+    ['07/08/2026 10:48:45', '4', '18', 'Replaced 3 propellers.', '', '', '', '', 'Fixed gcs charging issue', ''],
+    ['', '', '', '', '', '', '', '', '', ''],
+  ];
+  assert.strictEqual(ctx.importOldMaintenance(), 2);
+  const rows = rowsOf(sheets.maintenance);
+  const a = rows.find((r) => r.id === 'import-maintenance-4');
+  assert.strictEqual(a.performed_at, '2026-08-07 10:48:45');
+  assert.strictEqual(a.aircraft_id, 'd18');
+  assert.strictEqual(a.arm_assembly, 'Replaced 3 propellers.');
+  assert.strictEqual(a.power_system, 'Fixed gcs charging issue');
+  assert.strictEqual(a.center_plate, '');
+  const b = rows.find((r) => r.id === 'import-maintenance-1');
+  assert.strictEqual(b.performed_at, '2026-03-25 19:21:00');
+  assert.strictEqual(b.leg_assembly, 'Checked');
+  // Drone 24 was missing and is added.
+  assert.ok(sheets.aircraft.cells.some((r) => r.includes('24')));
+  ctx.importOldMaintenance();
+  assert.strictEqual(sheets.maintenance.cells.length, 3);
+});
