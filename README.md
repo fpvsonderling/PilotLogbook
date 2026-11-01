@@ -1,71 +1,75 @@
 # Pilot Logbook
 
-Журнал полётов дронов для компании: полёты, чеклисты, отчёты о неисправностях, статистика пилотов. Приложение работает без интернета и синхронизируется с одной Google-таблицей, когда сеть появляется.
+Drone flight logbook for a company: flights, checklists, fault reports and pilot statistics. The app works offline and syncs with a single Google Sheet whenever a connection is available.
 
-- `app/` — приложение на Flutter (сначала Windows, потом Android, iOS, macOS).
-- `apps_script/` — скрипт для Google-таблицы: принимает данные от приложения, сохраняет фото на Google Drive и раз в месяц делает бэкап.
+- `app/` — the Flutter app (Windows first, then Android, iOS, macOS).
+- `apps_script/` — the Google Sheets script: receives data from the app, stores photos on Google Drive and makes a monthly backup.
 
-## Как это устроено
+## How it works
 
 ```
-Приложение (локальная база SQLite, работает офлайн)
-        │  одна HTTPS-синхронизация: отправить свои изменения, забрать чужие
+App (local SQLite database, works offline)
+        │  one HTTPS sync: push own changes, pull everyone else's
         ▼
-Apps Script в Google-таблице  ──►  листы: flights, people, aircraft, ...
-                               ──►  Google Drive: PilotLogbook Photos, PilotLogbook Backups
+Apps Script in the Google Sheet  ──►  tabs: flights, people, aircraft, ...
+                                 ──►  Google Drive: PilotLogbook Photos, PilotLogbook Backups
 ```
 
-- Каждая таблица базы — отдельный лист. В первой строке названия колонок, все значения хранятся как текст.
-- У каждой строки есть `id`, `updated_at`, `server_seq`, `deleted` и `created_by`. Если одну запись правили на двух устройствах, побеждает более поздняя правка. Удалённые строки не стираются, им ставится `deleted = 1`.
-- Бэкап: 1-го числа каждого месяца около 03:00 скрипт кладёт копию всей таблицы в папку **PilotLogbook Backups** на Google Drive.
+- Each database table is its own sheet tab. The first row holds the column names; all values are stored as text.
+- Every row has `id`, `updated_at`, `server_seq`, `deleted` and `created_by`. If the same record was edited on two devices, the later edit wins. Deleted rows are not erased; they get `deleted = 1`.
+- Backup: on the 1st of every month at about 03:00 the script puts a copy of the whole spreadsheet into the **PilotLogbook Backups** folder on Google Drive.
 
-## Настройка (один раз, ~10 минут)
+## Setup (once, ~10 minutes)
 
-1. Откройте [script.google.com](https://script.google.com) под Google-аккаунтом компании и нажмите **Новый проект**. Если что-то не открывается, используйте окно инкогнито (Ctrl+Shift+N) и войдите только в один аккаунт.
-2. Откройте [код скрипта](https://raw.githubusercontent.com/fpvsonderling/PilotLogbook/main/apps_script/Code.gs), выделите всё (Ctrl+A), скопируйте (Ctrl+C) и вставьте в редактор вместо того, что там написано. Сохраните (Ctrl+S).
-3. Вверху выберите функцию **setup** и нажмите **Выполнить**. Google попросит разрешения: **Проверить разрешения** → ваш аккаунт → **Дополнительно** → **Перейти на страницу** → **Разрешить**. Скрипт сам создаст таблицу «Pilot Logbook» со всеми листами и включит ежемесячный бэкап.
-4. Нажмите **Начать развёртывание → Новое развёртывание**. Тип (шестерёнка) — **Веб-приложение**, «Запуск от имени»: **Я**, «Кто имеет доступ»: **Все**. Нажмите **Начать развёртывание**.
-5. Выберите функцию **connectionLink** и нажмите **Выполнить**. Внизу, в журнале, появятся две ссылки вида `https://script.google.com/macros/s/.../exec?key=...`: первая для пилотов, вторая для администраторов.
-6. В приложении откройте **Settings**, вставьте ссылку и нажмите **Save and sync**.
+1. Open [script.google.com](https://script.google.com) with the company Google account and click **New project**. If something doesn't open, use an incognito window (Ctrl+Shift+N) and sign in to one account only.
+2. Open the [script code](https://raw.githubusercontent.com/fpvsonderling/PilotLogbook/main/apps_script/Code.gs), select all (Ctrl+A), copy (Ctrl+C) and paste it into the editor, replacing what is there. Save (Ctrl+S).
+3. At the top, choose the **setup** function and click **Run**. Google will ask for permissions: **Review permissions** → your account → **Advanced** → **Go to the project** → **Allow**. The script creates the "Pilot Logbook" spreadsheet with all tabs and turns on the monthly backup.
+4. Click **Deploy → New deployment**. Type (gear icon): **Web app**, "Execute as": **Me**, "Who has access": **Anyone**. Click **Deploy**.
+5. Choose the **connectionLink** function and click **Run**. Two links like `https://script.google.com/macros/s/.../exec?key=...` appear in the log at the bottom: the first is for pilots, the second for administrators.
+6. In the app open **Settings**, paste the link and click **Save and sync**.
 
-Ссылка для пилотов одна на всех: каждый вставляет её у себя в Settings. Ссылку администратора давайте только тем, кто может менять и удалять данные.
+There is one pilot link for everyone: each pilot pastes it into their own Settings. Give the admin link only to people who may edit and delete data.
 
-## Кто что может менять
+## Who can change what
 
-- **Администратор** (вторая ссылка из `connectionLink`): открывает по клику и меняет любую запись, в окне есть **Delete**. В Reference data удалённый человек или дрон пропадает из списков выбора, но в старых полётах его имя остаётся.
-- **Пилот со своей ссылкой**: меняет и удаляет только те полёты и daily checks, которые добавил сам. Свою ссылку делает администратор: **Reference data → People →** человек **→ Personal link**. Ссылка копируется, её нужно отправить этому человеку, он вставляет её у себя в Settings вместо общей.
-- **Общая ссылка пилотов**: можно только добавлять, сохранённые записи не открываются.
-- Внизу **Settings** видно, какой доступ у этого компьютера.
-- Запрет проверяет и сам скрипт: даже изменённое приложение не сможет изменить чужую строку в таблице. Кто добавил строку, записано в колонке `created_by`.
+- **Administrator** (the second link from `connectionLink`): opens any record with a click and edits it; the window has **Delete**. In Reference data a deleted person or drone disappears from the pick lists, but their name stays in old flights.
+- **Pilot with a personal link**: edits and deletes only the flights and daily checks they added themselves. The administrator creates the link: **Reference data → People →** person **→ Personal link**. The link is copied; send it to that person, who pastes it into their Settings instead of the shared one.
+- **Shared pilot link**: can only add records; saved records don't open.
+- The bottom of **Settings** shows what access this computer has.
+- The script enforces this too: even a modified app cannot change someone else's row in the spreadsheet. Who added a row is stored in the `created_by` column.
 
-## Установка приложения на Windows
+## Installing the app on Windows
 
-1. Откройте вкладку **Actions** этого репозитория, затем последний успешный запуск **CI**. Внизу в разделе **Artifacts** скачайте `PilotLogbook-windows`.
-2. Распакуйте архив в любую папку и запустите `pilot_logbook.exe`. Windows может показать предупреждение SmartScreen, потому что приложение пока не подписано: **Подробнее → Выполнить в любом случае**.
-3. В приложении откройте **Settings**, вставьте ссылку из шага 5 настройки и нажмите **Save and sync**.
-4. В **Reference data** заполните людей (с ролями pilot / spotter / technician / signatory), проекты, дроны, батареи и типы заданий. Они появятся у всех после синхронизации.
+1. Open the latest release on the [Releases](https://github.com/fpvsonderling/PilotLogbook/releases) page and download `PilotLogbook-windows-<version>.zip` (or **Actions → CI →** latest successful run **→ Artifacts → `PilotLogbook-windows`**).
+2. Unzip it into any folder and run `pilot_logbook.exe`. Windows may show a SmartScreen warning because the app is not signed yet: **More info → Run anyway**.
+3. In the app open **Settings**, paste the link from setup step 5 and click **Save and sync**.
+4. In **Reference data** fill in people (with roles pilot / spotter / technician / signatory), projects, drones, batteries and task types. Everyone gets them after a sync.
 
-Синхронизация запускается при старте, после каждого сохранения и по кнопке **Sync** вверху. Цифра на кнопке показывает, сколько изменений ещё не отправлено.
+Sync runs at startup, after every save and with the **Sync** button at the top. The number on the button shows how many changes have not been sent yet.
 
-## Установка приложения на Android
+## Installing the app on Android
 
-1. На телефоне откройте ссылку [PilotLogbook.apk](https://github.com/fpvsonderling/PilotLogbook/releases/download/android-latest/PilotLogbook.apk) (последняя сборка). Файл также есть в **Actions → CI → Artifacts → `PilotLogbook-android`**.
-2. Откройте скачанный файл. Android спросит разрешение устанавливать приложения из браузера: **Настройки → Разрешить из этого источника**, затем **Установить**. Если появится Play Защита, нажмите **Всё равно установить**.
-3. Скопируйте свою ссылку подключения (например, из сообщения), в приложении откройте меню **☰ → Settings**, нажмите значок вставки справа в поле и **Save and sync**.
+1. On the phone open the [PilotLogbook.apk](https://github.com/fpvsonderling/PilotLogbook/releases/download/android-latest/PilotLogbook.apk) link (latest build). The APK is also attached to every release and available in **Actions → CI → Artifacts → `PilotLogbook-android`**.
+2. Open the downloaded file. Android asks for permission to install apps from the browser: **Settings → Allow from this source**, then **Install**. If Play Protect appears, tap **Install anyway**.
+3. Copy your connection link (for example from a message), open **☰ → Settings** in the app, tap the paste icon on the right of the field and then **Save and sync**.
 
-Новая версия ставится поверх старой, данные на телефоне сохраняются: CI подписывает все сборки одним ключом, который хранится в кэше Actions. GitHub удаляет кэш, которым не пользовались 7 дней; чтобы ключ был постоянным, добавьте секреты репозитория `ANDROID_KEYSTORE_BASE64` (keystore с alias `pilotlogbook` в base64) и `ANDROID_KEYSTORE_PASSWORD`. Если ключ сменился, перед установкой новой версии нажмите **Sync**, удалите старое приложение и поставьте новое.
+A new version installs over the old one and the data on the phone is kept: CI signs every build with the same key, stored in the Actions cache. GitHub deletes caches unused for 7 days; to make the key permanent, add the repository secrets `ANDROID_KEYSTORE_BASE64` (a keystore with alias `pilotlogbook`, base64-encoded) and `ANDROID_KEYSTORE_PASSWORD`. If the key has changed, tap **Sync** before installing the new version, uninstall the old app and install the new one.
+
+## Installing the app on iPhone
+
+Every change on `main` is uploaded to TestFlight automatically. Install the **TestFlight** app from the App Store and accept the invitation for Pilot Logbook.
 
 ## Daily checks
 
-Раздел **Daily checks**: пилот выбирает себя и дрон, и приложение показывает чеклист этого дрона. Для FB3 (18, 19, 24) это UA и GCS вместе по FB3 Flight Manual v2.5.0, для M30T свой короткий список. У каждой секции есть кнопки **OK** / **Problem** (и **N/A**, где секция может не использоваться). Сверху видны проблемы из трёх последних чеков этого дрона.
+In **Daily checks** the pilot picks themselves and the drone, and the app shows that drone's checklist. For FB3 (18, 19, 24) it is UA and GCS together per FB3 Flight Manual v2.5.0; M30T has its own short list. Each section has **OK** / **Problem** buttons (and **N/A** where a section may not be used). Problems from the drone's last three checks are shown at the top.
 
-В таблице это листы `daily_checks_fb3` и `daily_checks_m30t`: одна строка на чек, одна колонка на секцию со значением `Ok`, `Not used` или текстом проблемы, как в старой таблице AppSheet. Пункты чеклистов лежат в `app/lib/data/checklists.dart`.
+In the spreadsheet these are the `daily_checks_fb3` and `daily_checks_m30t` tabs: one row per check, one column per section with the value `Ok`, `Not used` or the problem text, as in the old AppSheet spreadsheet. The checklist items live in `app/lib/data/checklists.dart`.
 
-## Безопасность
+## Security
 
-Ссылка подключения общая для всей компании и содержит ключ доступа: любой, у кого она есть, может добавлять данные в таблицу, поэтому не публикуйте её. Если ссылка утекла, удалите свойство `API_TOKEN` в **Настройках проекта → Свойства скрипта**, снова запустите `setup`, затем `connectionLink`, и раздайте новую ссылку. Для ссылки администратора то же самое со свойством `ADMIN_TOKEN`. Личные ссылки хранятся в свойстве `PERSON_TOKENS`: удалите его, чтобы отключить все личные ссылки.
+The connection link contains an access key: anyone who has it can add data to the spreadsheet, so do not publish it. If a link leaks, delete the `API_TOKEN` property in **Project Settings → Script properties**, run `setup` again, then `connectionLink`, and hand out the new link. Do the same with the `ADMIN_TOKEN` property for the admin link. Personal links are stored in the `PERSON_TOKENS` property: delete it to disable all personal links.
 
-## Разработка
+## Development
 
 ```bash
 cd app
@@ -74,8 +78,8 @@ flutter analyze
 flutter test
 flutter run -d windows
 
-# тесты Apps Script (из корня репозитория)
+# Apps Script tests (from the repository root)
 node --test 'apps_script/test/*.test.js'
 ```
 
-Колонки таблиц описаны в `app/lib/data/schema.dart`, и такой же список есть в `SCHEMA` в `apps_script/Code.gs`. Тест `schema_test.dart` следит, чтобы они совпадали: при добавлении колонки меняйте оба файла и заново запускайте `setup` в таблице.
+Table columns are defined in `app/lib/data/schema.dart`, and the same list is in `SCHEMA` in `apps_script/Code.gs`. The `schema_test.dart` test checks that they match: when you add a column, change both files and run `setup` again in the spreadsheet.
