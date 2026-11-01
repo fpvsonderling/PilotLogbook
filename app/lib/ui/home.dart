@@ -9,6 +9,7 @@ import 'reference_page.dart';
 import 'services.dart';
 import 'settings_page.dart';
 import 'stats_page.dart';
+import 'theme.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -137,7 +138,34 @@ class SyncButton extends StatelessWidget {
                         ? Icons.cloud_off
                         : Icons.sync,
                   ),
-            label: Text(pending > 0 ? 'Sync ($pending)' : 'Sync'),
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Sync'),
+                if (pending > 0) ...[
+                  const SizedBox(width: 6),
+                  // Gold count of changes still waiting for upload.
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppPalette.gold,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$pending',
+                      style: const TextStyle(
+                        color: AppPalette.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         );
       },

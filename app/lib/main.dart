@@ -68,7 +68,6 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
         title: 'Pilot Logbook',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
-        darkTheme: AppTheme.dark(),
         home: const HomePage(),
       ),
     );

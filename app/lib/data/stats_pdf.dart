@@ -55,7 +55,7 @@ class StatsSection {
 
 /// The Statistic page as a portrait A4 PDF: the figures as a grid of boxes,
 /// then every section as a table with bars. [regular] and [bold] are the
-/// app's Barlow TTF fonts.
+/// app's Inter TTF fonts.
 Future<Uint8List> statsPdf({
   required String title,
   required List<StatsFigure> figures,
