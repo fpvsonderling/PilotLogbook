@@ -894,7 +894,8 @@ function folder_(name) {
  * new name with the version), and the read-me is rewritten. Files bigger
  * than one Apps Script fetch (50 MB) are moved in 16 MB pieces.
  */
-const APPS_FOLDER = 'PilotLogbook - aplikacja';
+// Pavlo's shared Drive folder for the builds (2026-11-01).
+const APPS_FOLDER_ID = '1jbK37uJfd-LXqgn-0TOAda-tcou5iJHG';
 const APPS_README = 'CZYTAJ MNIE.txt';
 const GITHUB_REPO = 'fpvsonderling/PilotLogbook';
 const RELEASE_FILES = [
@@ -905,13 +906,12 @@ const RELEASE_FILES = [
 const CHUNK_BYTES = 16 * 1024 * 1024; // a multiple of 256 KB, as Drive wants
 
 /**
- * Run once: makes the folder (anyone with the link can download), checks
- * for a new release every 15 minutes, copies the current one now and logs
- * the folder link.
+ * Run once: checks for a new release every 15 minutes, copies the current
+ * one into the folder now and logs the folder link. The folder's sharing
+ * is left as its owner set it.
  */
 function setupAppsFolder() {
   const folder = appsFolder_();
-  folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   ScriptApp.getProjectTriggers()
     .filter(function (t) { return t.getHandlerFunction() === 'syncReleases'; })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
@@ -948,17 +948,10 @@ function syncReleases() {
   }
 }
 
+/** The builds folder: script property APPS_FOLDER_ID, else Pavlo's folder. */
 function appsFolder_() {
-  const id = PropertiesService.getScriptProperties().getProperty('APPS_FOLDER_ID');
-  if (id) {
-    try {
-      const folder = DriveApp.getFolderById(id);
-      if (!folder.isTrashed()) return folder;
-    } catch (e) { /* deleted: make a new one */ }
-  }
-  const folder = folder_(APPS_FOLDER);
-  PropertiesService.getScriptProperties().setProperty('APPS_FOLDER_ID', folder.getId());
-  return folder;
+  const id = PropertiesService.getScriptProperties().getProperty('APPS_FOLDER_ID') || APPS_FOLDER_ID;
+  return DriveApp.getFolderById(id);
 }
 
 /** The tag of the latest release, read from github.com's redirect. */

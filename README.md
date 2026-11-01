@@ -57,7 +57,7 @@ Apps Script в Google-таблице  ──►  листы: flights, people, ai
 
 ## Папка с приложением на Google Drive
 
-В Apps Script один раз запустите `setupAppsFolder()`: появится папка «PilotLogbook - aplikacja» (доступ по ссылке), ссылка будет в журнале выполнения. Каждые 15 минут скрипт проверяет последний релиз на GitHub и кладёт в папку Windows zip, Android APK (и macOS zip, когда он появится) поверх старых файлов: ссылки на файлы не меняются. Файл «CZYTAJ MNIE.txt» объясняет установку; ссылку TestFlight для iPhone можно задать в свойствах скрипта `TESTFLIGHT_LINK`.
+В Apps Script один раз запустите `setupAppsFolder()`: сборки пойдут в общую папку Павла на Drive (`APPS_FOLDER_ID` в Code.gs, можно переопределить свойством скрипта), ссылка будет в журнале выполнения. Каждые 15 минут скрипт проверяет последний релиз на GitHub и кладёт в папку Windows zip, Android APK (и macOS zip, когда он появится) поверх старых файлов: ссылки на файлы не меняются. Файл «CZYTAJ MNIE.txt» объясняет установку; ссылку TestFlight для iPhone можно задать в свойствах скрипта `TESTFLIGHT_LINK`.
 
 ## Daily checks
 
