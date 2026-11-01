@@ -448,6 +448,10 @@ test('syncReleases copies a new release to Drive in pieces, over the old files',
     getId: () => 'apps',
     isTrashed: () => false,
     getFilesByName: () => ({ hasNext: () => false }),
+    getFiles: () => {
+      const list = [{ getName: () => 'PilotLogbook-windows-v1.0.0.zip', getId: () => 'by-hand', isTrashed: () => false }];
+      return { hasNext: () => list.length > 0, next: () => list.shift() };
+    },
     createFile: (name, text) => (readme = text),
   };
   ctx.DriveApp.getFolderById = () => folder;
@@ -460,6 +464,8 @@ test('syncReleases copies a new release to Drive in pieces, over the old files',
   ctx.syncReleases();
   assert.strictEqual(props.APPS_VERSION, 'v2.0.0');
   assert.deepStrictEqual(JSON.parse(props.APPS_FILES), { windows: 'drive-1', android: 'drive-2' });
+  // The Windows zip uploaded by hand is replaced, not copied a second time.
+  assert.ok(calls.some(([m, u]) => m === 'patch' && u.includes('/files/by-hand?')));
   // 40 MB goes in three 16 MB pieces.
   assert.strictEqual(calls.filter(([m, u]) => m === 'put' && u === 'https://session/2').length, 3);
   assert.match(readme, /PilotLogbook-android-v2\.0\.0\.apk/);

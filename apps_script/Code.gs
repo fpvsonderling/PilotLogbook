@@ -937,7 +937,7 @@ function syncReleases() {
       const name = f.asset.replace('{v}', version);
       const url = 'https://github.com/' + GITHUB_REPO + '/releases/download/' + version + '/' + name;
       if (!assetUrl_(url)) return; // this release has no such build
-      ids[f.key] = copyToDrive_(url, name, f.mime, folder, ids[f.key]);
+      ids[f.key] = copyToDrive_(url, name, f.mime, folder, ids[f.key] || existingBuild_(folder, f));
       props.setProperty('APPS_FILES', JSON.stringify(ids));
       copied[f.key] = name;
     });
@@ -946,6 +946,21 @@ function syncReleases() {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * A build already in the folder (uploaded by hand, or by an older run), so
+ * the first run goes over it instead of adding a second copy.
+ */
+function existingBuild_(folder, f) {
+  const parts = f.asset.split('{v}');
+  const it = folder.getFiles();
+  while (it.hasNext()) {
+    const file = it.next();
+    const name = file.getName();
+    if (!file.isTrashed() && name.indexOf(parts[0]) === 0 && name.slice(-parts[1].length) === parts[1]) return file.getId();
+  }
+  return null;
 }
 
 /** The builds folder: script property APPS_FOLDER_ID, else Pavlo's folder. */
