@@ -149,8 +149,8 @@ jobs:
             PilotLogbook-windows-${{ env.VERSION }}.zip
             PilotLogbook-android-${{ env.VERSION }}.apk
           body: |
-            **Windows:** pobierz `PilotLogbook-windows-${{ env.VERSION }}.zip`, rozpakuj i uruchom `PilotLogbook\pilot_logbook.exe`.
-            **Android:** pobierz `PilotLogbook-android-${{ env.VERSION }}.apk` na telefonie i zainstaluj (zezwól na instalację z tego źródła).
+            **Windows:** download `PilotLogbook-windows-${{ env.VERSION }}.zip`, unzip it and run `PilotLogbook\pilot_logbook.exe`.
+            **Android:** download `PilotLogbook-android-${{ env.VERSION }}.apk` on the phone and install it (allow installs from this source).
 
   ios:
     runs-on: macos-latest
