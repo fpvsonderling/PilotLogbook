@@ -126,7 +126,22 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        const SizedBox(height: 24),
+        Text(
+          key: const Key('app-version'),
+          'Pilot Logbook $appVersion',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
       ],
     );
   }
 }
+
+/// Set by CI builds (--dart-define=APP_VERSION=1.3.0+42): version and build
+/// number, so it is easy to see who still runs an old copy.
+const appVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: 'dev build',
+);

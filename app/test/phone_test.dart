@@ -15,8 +15,7 @@ void main() {
   // draw every letter as a square box).
   setUpAll(() async {
     for (final (family, files) in [
-      ('Barlow', ['Regular', 'Medium', 'SemiBold', 'Bold']),
-      ('Barlow Condensed', ['SemiBold', 'Bold']),
+      ('Inter', ['Regular', 'Medium', 'SemiBold', 'Bold']),
     ]) {
       final loader = FontLoader(family);
       for (final f in files) {

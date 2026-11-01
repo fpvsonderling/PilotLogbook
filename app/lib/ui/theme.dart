@@ -1,54 +1,97 @@
 import 'package:flutter/material.dart';
 
-/// Field look: teal bar, big touch targets, outlined cards, Barlow type, and
-/// green / orange for OK / problem. Light and dark follow the system.
+/// Field look: white background, hunter green bar, big touch targets,
+/// outlined cards and Inter type. Only a light theme: the screens are read
+/// outdoors, where a white page is easiest to see.
+///
+/// Palette: hunter green (bars, main buttons, OK), sunflower gold (selected
+/// menu item, add buttons, highlights), rust brown (problems, aborted) and
+/// dark garnet (grounded, near miss).
+class AppPalette {
+  static const green = Color(0xFF3F563E);
+  static const white = Color(0xFFFBFFFE);
+  static const garnet = Color(0xFF6B0504);
+  static const rust = Color(0xFFA3320B);
+  static const gold = Color(0xFFE6AF2E);
+
+  static const text = Color(0xFF1B241C);
+  static const muted = Color(0xFF5E6A5E);
+  static const line = Color(0xFFD5DED4);
+  static const greenContainer = Color(0xFFE4EBE3);
+  static const goldContainer = Color(0xFFFBEFD2);
+  static const rustContainer = Color(0xFFF7E2D8);
+  static const garnetContainer = Color(0xFFF2DCDB);
+}
+
 class AppTheme {
-  static const brand = Color(0xFF00838F);
-
-  static ThemeData light() => _build(Brightness.light);
-  static ThemeData dark() => _build(Brightness.dark);
-
-  static ThemeData _build(Brightness brightness) {
-    final dark = brightness == Brightness.dark;
-    final scheme = ColorScheme.fromSeed(
-      seedColor: brand,
-      brightness: brightness,
-      primary: dark ? const Color(0xFF2BB3BF) : brand,
-      surface: dark ? const Color(0xFF101A1C) : const Color(0xFFF7F9F9),
-      surfaceContainerLow: dark
-          ? const Color(0xFF142023)
-          : const Color(0xFFFFFFFF),
-      outlineVariant: dark ? const Color(0xFF2A3A3D) : const Color(0xFFD3DDDD),
+  static ThemeData light() {
+    const scheme = ColorScheme(
+      brightness: Brightness.light,
+      primary: AppPalette.green,
+      onPrimary: Colors.white,
+      primaryContainer: AppPalette.greenContainer,
+      onPrimaryContainer: AppPalette.green,
+      secondary: AppPalette.gold,
+      onSecondary: AppPalette.text,
+      secondaryContainer: AppPalette.goldContainer,
+      onSecondaryContainer: Color(0xFF5C4300),
+      tertiary: AppPalette.rust,
+      onTertiary: Colors.white,
+      tertiaryContainer: AppPalette.rustContainer,
+      onTertiaryContainer: AppPalette.rust,
+      error: AppPalette.garnet,
+      onError: Colors.white,
+      errorContainer: AppPalette.garnetContainer,
+      onErrorContainer: AppPalette.garnet,
+      surface: AppPalette.white,
+      onSurface: AppPalette.text,
+      onSurfaceVariant: AppPalette.muted,
+      surfaceContainerLowest: Colors.white,
+      surfaceContainerLow: Colors.white,
+      surfaceContainer: Color(0xFFF4F8F3),
+      surfaceContainerHigh: Color(0xFFEEF3ED),
+      surfaceContainerHighest: AppPalette.greenContainer,
+      outline: Color(0xFF8A968A),
+      outlineVariant: AppPalette.line,
+      inverseSurface: AppPalette.text,
+      onInverseSurface: AppPalette.white,
+      inversePrimary: AppPalette.gold,
     );
     final base = ThemeData(
       colorScheme: scheme,
-      brightness: brightness,
-      fontFamily: 'Barlow',
+      brightness: Brightness.light,
+      fontFamily: 'Inter',
       visualDensity: VisualDensity.standard,
     );
     final text = base.textTheme;
-    TextStyle? display(TextStyle? s, [FontWeight w = FontWeight.w700]) =>
-        s?.copyWith(fontFamily: 'Barlow Condensed', fontWeight: w);
+    TextStyle? heading(TextStyle? s, [FontWeight w = FontWeight.w700]) =>
+        s?.copyWith(fontWeight: w, letterSpacing: -0.2);
     final shape12 = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(12),
+    );
+    const label = TextStyle(
+      fontFamily: 'Inter',
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
     );
     return base.copyWith(
       scaffoldBackgroundColor: scheme.surface,
       textTheme: text.copyWith(
-        headlineSmall: display(text.headlineSmall),
-        titleLarge: display(text.titleLarge),
-        titleMedium: display(
+        headlineSmall: heading(text.headlineSmall),
+        titleLarge: heading(text.titleLarge)?.copyWith(fontSize: 21),
+        titleMedium: heading(
           text.titleMedium,
           FontWeight.w600,
-        )?.copyWith(fontSize: 19),
+        )?.copyWith(fontSize: 17),
       ),
-      extensions: [dark ? CheckColors.dark : CheckColors.light],
+      extensions: const [CheckColors.light],
       appBarTheme: AppBarTheme(
-        backgroundColor: dark ? const Color(0xFF0E6C75) : brand,
+        backgroundColor: AppPalette.green,
         foregroundColor: Colors.white,
         elevation: 0,
-        titleTextStyle: display(text.titleLarge)
-            ?.copyWith(color: Colors.white, fontSize: 22),
+        scrolledUnderElevation: 0,
+        titleTextStyle: heading(text.titleLarge)
+            ?.copyWith(color: Colors.white, fontSize: 20),
       ),
       cardTheme: CardThemeData(
         elevation: 0,
@@ -63,46 +106,34 @@ class AppTheme {
         style: FilledButton.styleFrom(
           minimumSize: const Size(64, 48),
           shape: shape12,
-          textStyle: const TextStyle(
-            fontFamily: 'Barlow',
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
+          textStyle: label.copyWith(fontSize: 16, fontWeight: FontWeight.w700),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(64, 48),
           shape: shape12,
+          foregroundColor: scheme.primary,
           side: BorderSide(color: scheme.outlineVariant, width: 2),
         ),
       ),
+      // Add / report buttons stand out in gold on the white page.
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: scheme.primary,
-        foregroundColor: scheme.onPrimary,
-        extendedTextStyle: const TextStyle(
-          fontFamily: 'Barlow',
+        backgroundColor: AppPalette.gold,
+        foregroundColor: AppPalette.text,
+        extendedTextStyle: label.copyWith(
           fontSize: 16,
           fontWeight: FontWeight.w700,
         ),
       ),
       chipTheme: base.chipTheme.copyWith(
-        labelStyle: TextStyle(
-          color: scheme.onSurface,
-          fontFamily: 'Barlow',
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
+        labelStyle: label.copyWith(color: scheme.onSurface),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         shape: shape12,
         side: BorderSide(color: scheme.outlineVariant, width: 2),
+        backgroundColor: scheme.surfaceContainerLow,
         selectedColor: scheme.primary,
-        secondaryLabelStyle: TextStyle(
-          fontFamily: 'Barlow',
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: scheme.onPrimary,
-        ),
+        secondaryLabelStyle: label.copyWith(color: scheme.onPrimary),
         checkmarkColor: scheme.onPrimary,
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -113,15 +144,34 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: scheme.outlineVariant),
         ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: scheme.primary, width: 2),
+        ),
       ),
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: scheme.surfaceContainerLow,
-        indicatorColor: scheme.primaryContainer,
-        selectedLabelTextStyle: TextStyle(
-          fontFamily: 'Barlow',
+        backgroundColor: scheme.surface,
+        indicatorColor: AppPalette.gold,
+        selectedIconTheme: const IconThemeData(color: AppPalette.text),
+        unselectedIconTheme: IconThemeData(color: scheme.primary),
+        selectedLabelTextStyle: label.copyWith(
+          fontSize: 13,
           fontWeight: FontWeight.w700,
           color: scheme.primary,
         ),
+        unselectedLabelTextStyle: label.copyWith(
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+          color: scheme.onSurface,
+        ),
+      ),
+      navigationDrawerTheme: NavigationDrawerThemeData(
+        backgroundColor: scheme.surface,
+        indicatorColor: AppPalette.gold,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: scheme.primary,
+        linearTrackColor: scheme.primaryContainer,
       ),
       dividerTheme: DividerThemeData(color: scheme.outlineVariant),
     );
@@ -147,21 +197,12 @@ class CheckColors extends ThemeExtension<CheckColors> {
   final Color skippedContainer;
 
   static const light = CheckColors(
-    ok: Color(0xFF1B8A4B),
-    okContainer: Color(0xFFE3F4EA),
-    problem: Color(0xFFB4570B),
-    problemContainer: Color(0xFFFDEEDD),
-    skipped: Color(0xFF6B7A7C),
-    skippedContainer: Color(0xFFE9EEEE),
-  );
-
-  static const dark = CheckColors(
-    ok: Color(0xFF4CC97F),
-    okContainer: Color(0xFF12301F),
-    problem: Color(0xFFF2A25A),
-    problemContainer: Color(0xFF3A2510),
-    skipped: Color(0xFF9AABAD),
-    skippedContainer: Color(0xFF1E2B2E),
+    ok: AppPalette.green,
+    okContainer: AppPalette.greenContainer,
+    problem: AppPalette.rust,
+    problemContainer: AppPalette.rustContainer,
+    skipped: AppPalette.muted,
+    skippedContainer: Color(0xFFECEFEB),
   );
 
   static CheckColors of(BuildContext context) =>

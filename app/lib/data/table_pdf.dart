@@ -7,7 +7,7 @@ import 'table_filter.dart';
 
 /// A logbook list as a landscape A4 PDF: title, the filters used, a few
 /// totals and the table, repeated column headers and page numbers on every
-/// page. [regular] and [bold] are TTF fonts (the app's Barlow), which also
+/// page. [regular] and [bold] are TTF fonts (the app's Inter), which also
 /// have the Danish and Polish letters the built-in PDF fonts lack.
 Future<Uint8List> tablePdf<T>({
   required String title,

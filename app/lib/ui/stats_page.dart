@@ -155,8 +155,8 @@ class _StatsPageState extends State<StatsPage> {
         figures: figures,
         sections: sections,
         filters: filters,
-        regular: await rootBundle.load('assets/fonts/Barlow-Regular.ttf'),
-        bold: await rootBundle.load('assets/fonts/Barlow-SemiBold.ttf'),
+        regular: await rootBundle.load('assets/fonts/Inter-Regular.ttf'),
+        bold: await rootBundle.load('assets/fonts/Inter-SemiBold.ttf'),
       );
       if (!context.mounted) return;
       await deliverPdf(
