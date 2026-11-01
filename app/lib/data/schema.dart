@@ -55,6 +55,9 @@ class Tables {
     Col('model'),
     Col('serial'),
     Col('active', ColType.integer),
+    // What the drone flies: "cargo", "inspection" or "cargo,inspection".
+    // Empty (drones from before) counts as both. See DroneUsage.
+    Col('usage'),
   ]);
 
   static const batteries = TableDef('batteries', [
@@ -62,6 +65,8 @@ class Tables {
     Col('set_name'),
     Col('serial'),
     Col('active', ColType.integer),
+    // Drones the battery goes in, comma separated ids; empty = any drone.
+    Col('aircraft_ids'),
   ]);
 
   static const missionTypes = TableDef('mission_types', [

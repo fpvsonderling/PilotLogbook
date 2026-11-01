@@ -98,6 +98,40 @@ enum MissionTag {
       "($f.$column = 1 OR LOWER(COALESCE($f.mission, '')) LIKE '$_like')";
 }
 
+/// What a drone is used for, kept in its usage column comma separated.
+enum DroneUsage {
+  cargo('Cargo'),
+  inspection('Inspection');
+
+  const DroneUsage(this.label);
+  final String label;
+
+  /// The usages in a drone's usage column; empty means every one, as for
+  /// drones added before the column existed.
+  static Set<DroneUsage> of(String? usage) {
+    final names = {
+      for (final p in (usage ?? '').split(','))
+        if (p.trim().isNotEmpty) p.trim().toLowerCase(),
+    };
+    final out = {
+      for (final u in values)
+        if (names.contains(u.name)) u,
+    };
+    return out.isEmpty ? values.toSet() : out;
+  }
+
+  static String format(Set<DroneUsage> usages) => [
+    for (final u in values)
+      if (usages.contains(u)) u.name,
+  ].join(',');
+}
+
+/// Comma separated ids, e.g. a battery's aircraft_ids.
+Set<String> idList(String? ids) => {
+  for (final p in (ids ?? '').split(','))
+    if (p.trim().isNotEmpty) p.trim(),
+};
+
 /// Flights, flight time, aborted missions and near misses of one group:
 /// a pilot, a project, a drone, a month...
 class FlightStat {
@@ -158,6 +192,29 @@ class Logbook {
                 'SELECT id, name FROM ${table.name} ORDER BY name COLLATE NOCASE',
               ))
       r['id'] as String: (r['name'] as String?) ?? '',
+  };
+
+  /// Active drones for a logbook: [kind] is "cargo" or "inspection", as
+  /// in flights.kind. [keep] stays in even when it does not match, so an
+  /// old flight still shows its drone.
+  Map<String, String> dronesFor(String kind, {String? keep}) => {
+    for (final r in db.rows(Tables.aircraft, orderBy: 'name COLLATE NOCASE'))
+      if (r['id'] == keep ||
+          ((r['active'] as int? ?? 1) == 1 &&
+              DroneUsage.of(r['usage'] as String?).any((u) => u.name == kind)))
+        r['id'] as String: (r['name'] as String?) ?? '',
+  };
+
+  /// Active batteries that go in the drone [aircraftId]: those assigned to
+  /// it and those assigned to no drone. All of them when no drone is chosen.
+  Map<String, String> batteriesFor(String? aircraftId, {String? keep}) => {
+    for (final r in db.rows(Tables.batteries, orderBy: 'name COLLATE NOCASE'))
+      if (r['id'] == keep ||
+          ((r['active'] as int? ?? 1) == 1 &&
+              (aircraftId == null ||
+                  idList(r['aircraft_ids'] as String?).isEmpty ||
+                  idList(r['aircraft_ids'] as String?).contains(aircraftId))))
+        r['id'] as String: (r['name'] as String?) ?? '',
   };
 
   /// People whose roles include [role] (pilot, spotter, ...).

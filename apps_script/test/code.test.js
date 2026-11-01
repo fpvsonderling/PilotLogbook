@@ -437,3 +437,40 @@ test('old AppSheet maintenance rows become maintenance rows', () => {
   ctx.importOldMaintenance();
   assert.strictEqual(sheets.maintenance.cells.length, 3);
 });
+
+test('Inspection LogBook rows become inspection flights; drones get their usage', () => {
+  const { ctx, sheets, post, oldSheets } = load();
+  post({ action: 'sync', push: {
+    aircraft: [{ id: 'd18', updated_at: '2026-10-30T10:00:00.000Z', deleted: 0, name: '18', active: 1 }],
+    people: [{ id: 'p-marcel', updated_at: 't', deleted: 0, name: 'Marcel Jaworski', roles: 'pilot', active: 1 }],
+  }, since: {} });
+  oldSheets['1lvmAEMN34PAOrhTQ4FVdwH2R-I6y8jvoy0JpCZ72fSw'] = [
+    ['id', 'Date', 'Project', 'Dron №', 'TakeOff', 'Land', 'Time', 'RP', 'PA', 'NOTES'],
+    ['1', '08/10/2026', 'Dogger Bank', ' Matrice 30T', '03:14:15', '03:25:00', '00:10:45', 'Marcel Jaworski', 'Andy Grimes', 'T05 TEST'],
+    ['3', '12.10.2026', 'Dogger Bank', 'Matrice 30T', '14:47:03', '14:47:05', '00:00:02', 'Andy Grimes', 'Marcel Jaworski', 'Test'],
+    ['', '', '', '', '', '', '00:00:00', '', '', ''],
+  ];
+  assert.strictEqual(ctx.importInspectionLogbook(), 2);
+  const flights = rowsOf(sheets.flights);
+  const a = flights.find((r) => r.id === 'import-inspection-1');
+  assert.strictEqual(a.kind, 'inspection');
+  assert.strictEqual(a.date, '2026-10-08');
+  assert.strictEqual(a.duration_s, '645');
+  assert.strictEqual(a.rp_id, 'p-marcel');
+  assert.strictEqual(a.notes, 'T05 TEST');
+  assert.strictEqual(flights.find((r) => r.id === 'import-inspection-3').date, '2026-10-12');
+  const drones = rowsOf(sheets.aircraft);
+  const m30 = drones.find((r) => r.name === 'Matrice 30T');
+  assert.strictEqual(m30.usage, 'inspection');
+  assert.strictEqual(a.aircraft_id, m30.id);
+  assert.strictEqual(drones.find((r) => r.id === 'd18').usage, 'cargo');
+  assert.strictEqual(drones.find((r) => r.id === 'd18').name, '18');
+  const andy = rowsOf(sheets.people).find((r) => r.name === 'Andy Grimes');
+  assert.strictEqual(a.pa_id, andy.id);
+  assert.strictEqual(rowsOf(sheets.projects).length, 1);
+  // A rerun adds nothing new.
+  ctx.importInspectionLogbook();
+  assert.strictEqual(rowsOf(sheets.flights).length, 2);
+  assert.strictEqual(rowsOf(sheets.aircraft).length, 2);
+  assert.strictEqual(rowsOf(sheets.people).length, 2);
+});

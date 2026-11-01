@@ -56,9 +56,10 @@ void main() {
 
     final m = log.all().single;
     expect(m.done.length, 2);
-    expect([for (final (s, t) in m.work) '${s.title}: $t'], [
-      'Arm Assembly: Replaced 3 propellers.',
-    ]);
+    expect(
+      [for (final (s, t) in m.work) '${s.title}: $t'],
+      ['Arm Assembly: Replaced 3 propellers.'],
+    );
   });
 
   testWidgets('a technician saves a maintenance', (tester) async {
