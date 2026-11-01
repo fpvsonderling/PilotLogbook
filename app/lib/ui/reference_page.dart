@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/local_db.dart';
+import '../data/logbook.dart';
 import '../data/schema.dart';
 import 'services.dart';
 
@@ -44,11 +45,34 @@ class _ReferenceList extends StatelessWidget {
   const _ReferenceList({required this.table});
   final TableDef table;
 
+  /// Columns picked with chips instead of typed: roles, a drone's usage
+  /// and a battery's drones.
+  static const _chipColumns = {'roles', 'usage', 'aircraft_ids'};
+
   /// Text columns shown under the name, e.g. model and serial for drones.
   List<String> get _details => [
     for (final c in table.columns)
-      if (c.type == ColType.text && c.name != 'name') c.name,
+      if (c.type == ColType.text &&
+          c.name != 'name' &&
+          c.name != 'usage' &&
+          c.name != 'aircraft_ids')
+        c.name,
   ];
+
+  /// "Cargo, Inspection" for a drone, "Drones 18, 24" for a battery.
+  String? _chipDetail(DbRow r, Map<String, String> drones) {
+    if (table == Tables.aircraft) {
+      return DroneUsage.of(r['usage'] as String?)
+          .map((u) => u.label)
+          .join(', ');
+    }
+    if (table == Tables.batteries) {
+      final ids = idList(r['aircraft_ids'] as String?);
+      if (ids.isEmpty) return 'Any drone';
+      return 'Drones ${[for (final id in ids) drones[id] ?? '?'].join(', ')}';
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +87,7 @@ class _ReferenceList extends StatelessWidget {
       body: DbBuilder(
         builder: (context) {
           final rows = db.rows(table, orderBy: 'name COLLATE NOCASE');
+          final drones = services.logbook.names(Tables.aircraft);
           if (rows.isEmpty) {
             return const Center(child: Text('Nothing here yet'));
           }
@@ -75,6 +100,7 @@ class _ReferenceList extends StatelessWidget {
                     [
                       for (final d in _details)
                         if ((r[d] as String? ?? '').isNotEmpty) r[d],
+                      ?_chipDetail(r, drones),
                     ].join(' · '),
                   ),
                   trailing: r['active'] == 0 ? const Text('inactive') : null,
@@ -93,9 +119,11 @@ class _ReferenceList extends StatelessWidget {
     values['active'] ??= 1;
     final controllers = {
       for (final c in table.columns)
-        if (c.type == ColType.text && c.name != 'roles')
+        if (c.type == ColType.text && !_chipColumns.contains(c.name))
           c.name: TextEditingController(text: values[c.name] as String?),
     };
+    // Drones a battery can be put in.
+    final drones = services.logbook.names(Tables.aircraft, activeOnly: true);
     final action = await showDialog<_Action>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -134,6 +162,66 @@ class _ReferenceList extends StatelessWidget {
                               values['roles'] = personRoles
                                   .where(roles.contains)
                                   .join(',');
+                            }),
+                          ),
+                      ],
+                    ),
+                  ],
+                  if (table == Tables.aircraft) ...[
+                    const SizedBox(height: 12),
+                    _ChipsLabel('Used for'),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final u in DroneUsage.values)
+                          FilterChip(
+                            key: Key('usage-${u.name}'),
+                            label: Text(u.label),
+                            selected: DroneUsage.of(values['usage'] as String?)
+                                .contains(u),
+                            onSelected: (on) => setState(() {
+                              final now = DroneUsage.of(
+                                values['usage'] as String?,
+                              );
+                              on ? now.add(u) : now.remove(u);
+                              // At least one; none would read as both.
+                              if (now.isNotEmpty) {
+                                values['usage'] = DroneUsage.format(now);
+                              }
+                            }),
+                          ),
+                      ],
+                    ),
+                  ],
+                  if (table == Tables.batteries) ...[
+                    const SizedBox(height: 12),
+                    _ChipsLabel('Drones (none picked: fits any drone)'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final d in {
+                          ...drones,
+                          // A drone made inactive stays visible here.
+                          for (final id in idList(
+                            values['aircraft_ids'] as String?,
+                          ))
+                            if (!drones.containsKey(id))
+                              id:
+                                  services.logbook.names(Tables.aircraft)[id] ??
+                                  '?',
+                        }.entries)
+                          FilterChip(
+                            key: Key('battery-drone-${d.value}'),
+                            label: Text(d.value),
+                            selected: idList(values['aircraft_ids'] as String?)
+                                .contains(d.key),
+                            onSelected: (on) => setState(() {
+                              final ids = idList(
+                                values['aircraft_ids'] as String?,
+                              );
+                              on ? ids.add(d.key) : ids.remove(d.key);
+                              values['aircraft_ids'] = ids.join(',');
                             }),
                           ),
                       ],
@@ -189,13 +277,26 @@ class _ReferenceList extends StatelessWidget {
       services.db.delete(table, row!['id'] as String);
       services.sync.sync();
     }
-    for (final c in controllers.values) {
-      c.dispose();
-    }
+    // The controllers are not disposed: the dialog still shows them while
+    // it fades out, and they hold nothing but a few words of text.
   }
 }
 
 enum _Action { save, delete }
+
+class _ChipsLabel extends StatelessWidget {
+  const _ChipsLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text, style: Theme.of(context).textTheme.labelLarge),
+    ),
+  );
+}
 
 Future<bool> _confirmDelete(BuildContext context, DbRow row) async =>
     await showDialog<bool>(

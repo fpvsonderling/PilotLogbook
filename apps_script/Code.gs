@@ -20,8 +20,8 @@
 const SCHEMA = {
   people: ['name', 'roles', 'email', 'active'],
   projects: ['name', 'active'],
-  aircraft: ['name', 'model', 'serial', 'active'],
-  batteries: ['name', 'set_name', 'serial', 'active'],
+  aircraft: ['name', 'model', 'serial', 'active', 'usage'],
+  batteries: ['name', 'set_name', 'serial', 'active', 'aircraft_ids'],
   mission_types: ['name', 'active'],
   flights: ['date', 'kind', 'project_id', 'aircraft_id', 'battery_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes', 'aborted', 'near_miss'],
   checklist_templates: ['name', 'kind', 'active'],
@@ -723,6 +723,152 @@ function buildImportedMaintenance_(rows, aircraftIds) {
     out.push(row);
   });
   return { rows: out, aircraft: aircraft };
+}
+
+// -------------------------------------------- Inspection LogBook import
+
+const OLD_INSPECTIONS = '1lvmAEMN34PAOrhTQ4FVdwH2R-I6y8jvoy0JpCZ72fSw';
+
+/**
+ * Run once from the editor: copies the "Inspection_LogBook" sheet (Date,
+ * Project, Dron, TakeOff, Land, RP, PA, NOTES) into the flights tab as
+ * inspection flights. Missing projects, drones and people are added; the
+ * drones get usage "inspection". Drones with no usage yet were all on cargo
+ * flights and get "cargo", so each logbook offers only its own drones.
+ * The old sheet is only read. Safe to rerun.
+ */
+function importInspectionLogbook(spreadsheetId) {
+  const sheet = SpreadsheetApp.openById(spreadsheetId || OLD_INSPECTIONS).getSheets()[0];
+  const out = buildImportedInspections_(sheet.getDataRange().getDisplayValues(), {
+    aircraft: refRows_('aircraft'),
+    projects: refRows_('projects'),
+    people: refRows_('people'),
+  }, new Date().toISOString());
+  const res = sync_({ push: out, since: {} }, { admin: true, me: '' });
+  const n = function (t) { return (res.accepted[t] || []).length; };
+  Logger.log('Imported ' + n('flights') + ' inspection flights; ' + n('aircraft') + ' drones, ' +
+    n('projects') + ' projects and ' + n('people') + ' people added or updated.');
+  return n('flights');
+}
+
+/** Rows of a reference tab that are not deleted, as objects. */
+function refRows_(table) {
+  const sheet = ensureSheet_(table, false);
+  const header = readHeader_(sheet);
+  if (sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues()
+    .map(function (r) { return toObject_(header, r); })
+    .filter(function (o) { return o.id && o.deleted !== '1'; });
+}
+
+/**
+ * Sheet rows (header first) to flights, plus the projects, drones and
+ * people they need. [ref] holds the current aircraft, projects and people
+ * rows; [now] is the updated_at of drones whose usage changes.
+ */
+function buildImportedInspections_(rows, ref, now) {
+  const updatedAt = '2026-11-01T00:00:00.000Z';
+  const header = rows[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  const at = function (name) { return header.findIndex(function (h) { return h.indexOf(name) === 0; }); };
+  const idx = { id: header.indexOf('id'), date: at('date'), project: at('project'), drone: at('dron'),
+    takeoff: at('takeoff'), land: at('land'), rp: at('rp'), pa: at('pa'), notes: at('notes') };
+  const get = function (r, k) { return idx[k] < 0 ? '' : String(r[idx[k]] === undefined ? '' : r[idx[k]]).trim(); };
+  const sys = function (id) { return { id: id, updated_at: updatedAt, deleted: 0 }; };
+  const out = { aircraft: [], projects: [], people: [], flights: [] };
+  const byName = function (list) {
+    const m = {};
+    list.forEach(function (o) { m[String(o.name).trim().toLowerCase()] = o; });
+    return m;
+  };
+  const drones = byName(ref.aircraft);
+  const projects = byName(ref.projects);
+  const people = byName(ref.people);
+  const slug = function (s) { return s.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase(); };
+
+  // Drones flown before the usage column: every one was a cargo drone.
+  ref.aircraft.forEach(function (d) {
+    if (!String(d.usage || '').trim()) {
+      d.usage = 'cargo';
+      out.aircraft.push({ id: d.id, updated_at: now, usage: 'cargo' });
+    }
+  });
+  const drone = function (name) {
+    const key = name.toLowerCase();
+    let d = drones[key];
+    if (!d) {
+      d = drones[key] = Object.assign(sys('import-aircraft-' + slug(name)), { name: name, active: 1, usage: 'inspection' });
+      out.aircraft.push(d);
+    } else if (String(d.usage).split(',').indexOf('inspection') < 0) {
+      d.usage = (d.usage ? d.usage + ',' : '') + 'inspection';
+      const pending = out.aircraft.filter(function (a) { return a.id === d.id; })[0];
+      if (pending) pending.usage = d.usage;
+      else out.aircraft.push({ id: d.id, updated_at: now, usage: d.usage });
+    }
+    return d.id;
+  };
+  const project = function (name) {
+    if (!name) return '';
+    const key = name.toLowerCase();
+    if (!projects[key]) {
+      projects[key] = Object.assign(sys('import-project-' + slug(name)), { name: name, active: 1 });
+      out.projects.push(projects[key]);
+    }
+    return projects[key].id;
+  };
+  const person = function (name) {
+    if (!name) return '';
+    const key = name.toLowerCase();
+    if (!people[key]) {
+      people[key] = Object.assign(sys('import-person-' + slug(name)), { name: name, roles: 'pilot', active: 1 });
+      out.people.push(people[key]);
+    }
+    return people[key].id;
+  };
+
+  rows.slice(1).forEach(function (r, i) {
+    const date = sheetDate_(get(r, 'date'));
+    const takeoff = clock_(get(r, 'takeoff'));
+    const land = clock_(get(r, 'land'));
+    if (!date || !get(r, 'drone')) return;
+    const id = 'import-inspection-' + (get(r, 'id') || date + '-' + takeoff.replace(/\D/g, '') + '-' + i);
+    out.flights.push(Object.assign(sys(id), {
+      date: date,
+      kind: 'inspection',
+      project_id: project(get(r, 'project')),
+      aircraft_id: drone(get(r, 'drone')),
+      takeoff_at: takeoff,
+      landing_at: land,
+      duration_s: seconds_(takeoff, land),
+      rp_id: person(get(r, 'rp')),
+      pa_id: person(get(r, 'pa')),
+      notes: get(r, 'notes'),
+    }));
+  });
+  return out;
+}
+
+/** "08/10/2026", "12.10.2026" (day first) or "2026-10-12" -> "2026-10-12". */
+function sheetDate_(v) {
+  const t = String(v || '').trim();
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = t.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/);
+  if (!m) return '';
+  return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+}
+
+/** "3:14:15" or "03:14" -> "03:14:15" / "03:14:00"; anything else -> "". */
+function clock_(v) {
+  const m = String(v || '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  return m ? ('0' + m[1]).slice(-2) + ':' + m[2] + ':' + (m[3] || '00') : '';
+}
+
+/** Seconds from take-off to landing, past midnight when landing is earlier. */
+function seconds_(takeoff, land) {
+  if (!takeoff || !land) return '';
+  const s = function (c) { const p = c.split(':').map(Number); return p[0] * 3600 + p[1] * 60 + p[2]; };
+  const d = s(land) - s(takeoff);
+  return d >= 0 ? d : d + 86400;
 }
 
 // ----------------------------------------------------------------- backup
