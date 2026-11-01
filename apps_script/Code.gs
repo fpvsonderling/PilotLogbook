@@ -884,3 +884,175 @@ function folder_(name) {
   const it = DriveApp.getFoldersByName(name);
   return it.hasNext() ? it.next() : DriveApp.createFolder(name);
 }
+
+// ------------------------------------------------------- app builds on Drive
+
+/*
+ * A Drive folder that always holds the newest app builds. Every 15 minutes
+ * syncReleases() asks GitHub for the latest release; when it is new, each
+ * build is copied into the folder over the old file (same file, same link,
+ * new name with the version), and the read-me is rewritten. Files bigger
+ * than one Apps Script fetch (50 MB) are moved in 16 MB pieces.
+ */
+// Pavlo's shared Drive folder for the builds (2026-11-01).
+const APPS_FOLDER_ID = '1jbK37uJfd-LXqgn-0TOAda-tcou5iJHG';
+const APPS_README = 'CZYTAJ MNIE.txt';
+const GITHUB_REPO = 'fpvsonderling/PilotLogbook';
+const RELEASE_FILES = [
+  { key: 'windows', asset: 'PilotLogbook-windows-{v}.zip', mime: 'application/zip' },
+  { key: 'android', asset: 'PilotLogbook-android-{v}.apk', mime: 'application/vnd.android.package-archive' },
+  { key: 'macos', asset: 'PilotLogbook-macos-{v}.zip', mime: 'application/zip' },
+];
+const CHUNK_BYTES = 16 * 1024 * 1024; // a multiple of 256 KB, as Drive wants
+
+/**
+ * Run once: checks for a new release every 15 minutes, copies the current
+ * one into the folder now and logs the folder link. The folder's sharing
+ * is left as its owner set it.
+ */
+function setupAppsFolder() {
+  const folder = appsFolder_();
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === 'syncReleases'; })
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('syncReleases').timeBased().everyMinutes(15).create();
+  PropertiesService.getScriptProperties().deleteProperty('APPS_VERSION');
+  syncReleases();
+  Logger.log('Folder z aplikacją: ' + folder.getUrl());
+  return folder.getUrl();
+}
+
+/** Copies the latest GitHub release into the folder when it is new. */
+function syncReleases() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const version = latestRelease_();
+    if (!version || props.getProperty('APPS_VERSION') === version) return;
+    const folder = appsFolder_();
+    const ids = JSON.parse(props.getProperty('APPS_FILES') || '{}');
+    const copied = {};
+    RELEASE_FILES.forEach(function (f) {
+      const name = f.asset.replace('{v}', version);
+      const url = 'https://github.com/' + GITHUB_REPO + '/releases/download/' + version + '/' + name;
+      if (!assetUrl_(url)) return; // this release has no such build
+      ids[f.key] = copyToDrive_(url, name, f.mime, folder, ids[f.key] || existingBuild_(folder, f));
+      props.setProperty('APPS_FILES', JSON.stringify(ids));
+      copied[f.key] = name;
+    });
+    writeReadme_(folder, version, copied);
+    props.setProperty('APPS_VERSION', version);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * A build already in the folder (uploaded by hand, or by an older run), so
+ * the first run goes over it instead of adding a second copy.
+ */
+function existingBuild_(folder, f) {
+  const parts = f.asset.split('{v}');
+  const it = folder.getFiles();
+  while (it.hasNext()) {
+    const file = it.next();
+    const name = file.getName();
+    if (!file.isTrashed() && name.indexOf(parts[0]) === 0 && name.slice(-parts[1].length) === parts[1]) return file.getId();
+  }
+  return null;
+}
+
+/** The builds folder: script property APPS_FOLDER_ID, else Pavlo's folder. */
+function appsFolder_() {
+  const id = PropertiesService.getScriptProperties().getProperty('APPS_FOLDER_ID') || APPS_FOLDER_ID;
+  return DriveApp.getFolderById(id);
+}
+
+/** The tag of the latest release, read from github.com's redirect. */
+function latestRelease_() {
+  const res = UrlFetchApp.fetch('https://github.com/' + GITHUB_REPO + '/releases/latest',
+    { followRedirects: false, muteHttpExceptions: true });
+  const m = String(header_(res, 'location') || '').match(/\/releases\/tag\/([^\/?#]+)$/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Where a release file's bytes are now (a short-lived link), or null. */
+function assetUrl_(url) {
+  const res = UrlFetchApp.fetch(url, { followRedirects: false, muteHttpExceptions: true });
+  return res.getResponseCode() === 302 ? header_(res, 'location') : null;
+}
+
+function header_(res, name) {
+  const headers = res.getAllHeaders();
+  const key = Object.keys(headers).filter(function (k) { return k.toLowerCase() === name; })[0];
+  const v = key ? headers[key] : null;
+  return Array.isArray(v) ? v[0] : v;
+}
+
+/**
+ * Streams one release file into Drive with a resumable upload: over the
+ * file we made last time when it still exists, so its link stays the same.
+ * Returns the Drive file id.
+ */
+function copyToDrive_(url, name, mime, folder, fileId) {
+  const first = UrlFetchApp.fetch(assetUrl_(url), { headers: { Range: 'bytes=0-0' }, muteHttpExceptions: true });
+  const total = Number(String(header_(first, 'content-range') || '').split('/')[1]);
+  if (first.getResponseCode() !== 206 || !total) throw new Error('No size for ' + name);
+
+  let existing = false;
+  if (fileId) {
+    try { existing = !DriveApp.getFileById(fileId).isTrashed(); } catch (e) { existing = false; }
+  }
+  const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
+  const start = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files' +
+    (existing ? '/' + fileId : '') + '?uploadType=resumable&fields=id', {
+    method: existing ? 'patch' : 'post',
+    contentType: 'application/json; charset=UTF-8',
+    headers: Object.assign({ 'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': String(total) }, auth),
+    payload: JSON.stringify(existing ? { name: name } : { name: name, parents: [folder.getId()] }),
+    muteHttpExceptions: true,
+  });
+  const session = header_(start, 'location');
+  if (start.getResponseCode() !== 200 || !session) {
+    throw new Error('Drive upload of ' + name + ' failed: ' + start.getContentText());
+  }
+  for (let from = 0; from < total; from += CHUNK_BYTES) {
+    const to = Math.min(from + CHUNK_BYTES, total) - 1;
+    const piece = UrlFetchApp.fetch(assetUrl_(url), { headers: { Range: 'bytes=' + from + '-' + to }, muteHttpExceptions: true });
+    if (piece.getResponseCode() !== 206) throw new Error('Download of ' + name + ' failed: ' + piece.getResponseCode());
+    const put = UrlFetchApp.fetch(session, {
+      method: 'put',
+      contentType: mime,
+      headers: { 'Content-Range': 'bytes ' + from + '-' + to + '/' + total },
+      payload: piece.getContent(),
+      muteHttpExceptions: true,
+    });
+    const code = put.getResponseCode();
+    if (code === 200 || code === 201) return JSON.parse(put.getContentText()).id;
+    if (code !== 308) throw new Error('Drive upload of ' + name + ' failed: ' + put.getContentText());
+  }
+  throw new Error('Drive upload of ' + name + ' did not finish');
+}
+
+/** The read-me: what is in the folder and how to install it. */
+function readmeText_(version, copied, testFlight) {
+  const lines = ['Pilot Logbook ' + version, ''];
+  if (copied.windows) lines.push('Windows: pobierz ' + copied.windows + ', rozpakuj i uruchom PilotLogbook\\pilot_logbook.exe.');
+  if (copied.android) lines.push('Android: pobierz ' + copied.android + ' na telefonie i zainstaluj (zezwól na instalację z tego źródła).');
+  lines.push('iPhone / iPad: zainstaluj TestFlight z App Store, potem ' +
+    (testFlight ? 'otwórz ten link: ' + testFlight : 'poproś administratora o zaproszenie do TestFlight') +
+    '. Nowe wersje przychodzą same przez TestFlight.');
+  lines.push(copied.macos
+    ? 'macOS: pobierz ' + copied.macos + ', rozpakuj i przenieś Pilot Logbook do Aplikacji.'
+    : 'macOS: wersja na Maca jest w przygotowaniu.');
+  lines.push('', 'Pliki w tym folderze podmieniają się same po każdym nowym wydaniu.');
+  return lines.join('\n');
+}
+
+function writeReadme_(folder, version, copied) {
+  const text = readmeText_(version, copied, PropertiesService.getScriptProperties().getProperty('TESTFLIGHT_LINK'));
+  const it = folder.getFilesByName(APPS_README);
+  if (it.hasNext()) it.next().setContent(text);
+  else folder.createFile(APPS_README, text, MimeType.PLAIN_TEXT);
+}
