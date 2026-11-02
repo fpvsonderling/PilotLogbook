@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'daily_checks_page.dart';
+import 'documents_page.dart';
 import 'faults_page.dart';
 import 'flights_page.dart';
 import 'maintenance_page.dart';
@@ -30,6 +31,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.bar_chart, 'Statistic'),
     (Icons.list_alt, 'Reference data'),
     (Icons.build, 'Nm'),
+    (Icons.description, 'Documents'),
     (Icons.settings, 'Settings'),
   ];
 
@@ -42,6 +44,7 @@ class _HomePageState extends State<HomePage> {
     5 => const StatsPage(),
     6 => const ReferencePage(),
     7 => const NmPage(),
+    8 => const DocumentsPage(),
     _ => const SettingsPage(),
   };
 
@@ -75,17 +78,30 @@ class _HomePageState extends State<HomePage> {
           ? _page()
           : Row(
               children: [
-                NavigationRail(
-                  selectedIndex: _index,
-                  onDestinationSelected: (i) => setState(() => _index = i),
-                  labelType: NavigationRailLabelType.all,
-                  destinations: [
-                    for (final (icon, label) in _pages)
-                      NavigationRailDestination(
-                        icon: Icon(icon),
-                        label: Text(label),
+                // Scrolls when the window is too low for every item.
+                LayoutBuilder(
+                  builder: (context, constraints) => SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
                       ),
-                  ],
+                      child: IntrinsicHeight(
+                        child: NavigationRail(
+                          selectedIndex: _index,
+                          onDestinationSelected: (i) =>
+                              setState(() => _index = i),
+                          labelType: NavigationRailLabelType.all,
+                          destinations: [
+                            for (final (icon, label) in _pages)
+                              NavigationRailDestination(
+                                icon: Icon(icon),
+                                label: Text(label),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
                 const VerticalDivider(width: 1),
                 Expanded(child: _page()),

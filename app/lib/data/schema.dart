@@ -225,10 +225,19 @@ class Tables {
     Col('notes'),
   ]);
 
+  // Documents every pilot needs. Only the admin link adds, changes and
+  // deletes them. The file is in Google Drive; each app keeps a copy for
+  // offline use (see documents.dart).
   static const documents = TableDef('documents', [
     Col('title'),
-    Col('url'),
+    Col('url'), // the file in Drive, or any web page
     Col('notes'),
+    Col('drive_file_id'),
+    Col('file_name'),
+    Col('mime_type'),
+    Col('size_bytes', ColType.integer),
+    // Drive's last change of the file; a new one makes apps download again.
+    Col('file_version'),
   ]);
 
   static const all = [

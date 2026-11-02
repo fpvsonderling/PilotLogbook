@@ -41,6 +41,12 @@ class FakeSheets implements SyncTransport {
       for (final r in push[t.name] ?? const <DbRow>[]) {
         final id = r['id'] as String;
         final existing = rows[id];
+        // Documents: only the admin link (ADMIN_ONLY_TABLES in Code.gs).
+        if (!admin && t == Tables.documents) {
+          if (existing != null) rejected.add(id);
+          no.add(id);
+          continue;
+        }
         final own =
             existing != null && me.isNotEmpty && existing['created_by'] == me;
         if (viewer) {
