@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 /// Field look: white background, hunter green bar, big touch targets,
-/// outlined cards and Inter type. Only a light theme: the screens are read
-/// outdoors, where a white page is easiest to see.
+/// outlined cards and Inter type. Light is the default, since a white page
+/// is easiest to read outdoors; a dark variant of the same palette is for
+/// evenings and night flights (Settings → Theme).
 ///
 /// Palette: hunter green (bars, main buttons, OK), sunflower gold (selected
 /// menu item, add buttons, highlights), rust brown (problems, aborted) and
@@ -21,45 +22,111 @@ class AppPalette {
   static const goldContainer = Color(0xFFFBEFD2);
   static const rustContainer = Color(0xFFF7E2D8);
   static const garnetContainer = Color(0xFFF2DCDB);
+
+  // Dark variant: near-black green page, lighter tints of the same colors
+  // so text and icons stay readable on it.
+  static const darkPage = Color(0xFF121812);
+  static const darkCard = Color(0xFF1A221A);
+  static const darkText = Color(0xFFE6ECE5);
+  static const darkMuted = Color(0xFFA3B0A2);
+  static const darkLine = Color(0xFF334033);
+  static const sage = Color(0xFFA8C5A4);
+  static const darkGreenContainer = Color(0xFF2A3A29);
+  static const darkGoldContainer = Color(0xFF4A3A12);
+  static const lightRust = Color(0xFFF08A63);
+  static const darkRustContainer = Color(0xFF4D2213);
+  static const lightGarnet = Color(0xFFF2A39E);
+  static const darkGarnetContainer = Color(0xFF4A1716);
+}
+
+/// Light, dark or follow the system; kept in the local settings table.
+class ThemeChoice {
+  static const settingsKey = 'theme_mode';
+
+  static ThemeMode parse(String? value) => switch (value) {
+    'dark' => ThemeMode.dark,
+    'system' => ThemeMode.system,
+    _ => ThemeMode.light,
+  };
+
+  static String store(ThemeMode mode) => mode.name;
 }
 
 class AppTheme {
-  static ThemeData light() {
-    const scheme = ColorScheme(
-      brightness: Brightness.light,
-      primary: AppPalette.green,
-      onPrimary: Colors.white,
-      primaryContainer: AppPalette.greenContainer,
-      onPrimaryContainer: AppPalette.green,
-      secondary: AppPalette.gold,
-      onSecondary: AppPalette.text,
-      secondaryContainer: AppPalette.goldContainer,
-      onSecondaryContainer: Color(0xFF5C4300),
-      tertiary: AppPalette.rust,
-      onTertiary: Colors.white,
-      tertiaryContainer: AppPalette.rustContainer,
-      onTertiaryContainer: AppPalette.rust,
-      error: AppPalette.garnet,
-      onError: Colors.white,
-      errorContainer: AppPalette.garnetContainer,
-      onErrorContainer: AppPalette.garnet,
-      surface: AppPalette.white,
-      onSurface: AppPalette.text,
-      onSurfaceVariant: AppPalette.muted,
-      surfaceContainerLowest: Colors.white,
-      surfaceContainerLow: Colors.white,
-      surfaceContainer: Color(0xFFF4F8F3),
-      surfaceContainerHigh: Color(0xFFEEF3ED),
-      surfaceContainerHighest: AppPalette.greenContainer,
-      outline: Color(0xFF8A968A),
-      outlineVariant: AppPalette.line,
-      inverseSurface: AppPalette.text,
-      onInverseSurface: AppPalette.white,
-      inversePrimary: AppPalette.gold,
-    );
+  static ThemeData light() => _build(_lightScheme, CheckColors.light);
+
+  static ThemeData dark() => _build(_darkScheme, CheckColors.dark);
+
+  static const _darkScheme = ColorScheme(
+    brightness: Brightness.dark,
+    primary: AppPalette.sage,
+    onPrimary: Color(0xFF10200F),
+    primaryContainer: AppPalette.darkGreenContainer,
+    onPrimaryContainer: AppPalette.sage,
+    secondary: AppPalette.gold,
+    onSecondary: AppPalette.text,
+    secondaryContainer: AppPalette.darkGoldContainer,
+    onSecondaryContainer: Color(0xFFF6D98F),
+    tertiary: AppPalette.lightRust,
+    onTertiary: Color(0xFF2B0E04),
+    tertiaryContainer: AppPalette.darkRustContainer,
+    onTertiaryContainer: AppPalette.lightRust,
+    error: AppPalette.lightGarnet,
+    onError: Color(0xFF2B0807),
+    errorContainer: AppPalette.darkGarnetContainer,
+    onErrorContainer: AppPalette.lightGarnet,
+    surface: AppPalette.darkPage,
+    onSurface: AppPalette.darkText,
+    onSurfaceVariant: AppPalette.darkMuted,
+    surfaceContainerLowest: Color(0xFF0D120D),
+    surfaceContainerLow: AppPalette.darkCard,
+    surfaceContainer: Color(0xFF1E271E),
+    surfaceContainerHigh: Color(0xFF243024),
+    surfaceContainerHighest: AppPalette.darkGreenContainer,
+    outline: Color(0xFF6F7E6E),
+    outlineVariant: AppPalette.darkLine,
+    inverseSurface: AppPalette.darkText,
+    onInverseSurface: AppPalette.darkPage,
+    inversePrimary: AppPalette.green,
+  );
+
+  static const _lightScheme = ColorScheme(
+    brightness: Brightness.light,
+    primary: AppPalette.green,
+    onPrimary: Colors.white,
+    primaryContainer: AppPalette.greenContainer,
+    onPrimaryContainer: AppPalette.green,
+    secondary: AppPalette.gold,
+    onSecondary: AppPalette.text,
+    secondaryContainer: AppPalette.goldContainer,
+    onSecondaryContainer: Color(0xFF5C4300),
+    tertiary: AppPalette.rust,
+    onTertiary: Colors.white,
+    tertiaryContainer: AppPalette.rustContainer,
+    onTertiaryContainer: AppPalette.rust,
+    error: AppPalette.garnet,
+    onError: Colors.white,
+    errorContainer: AppPalette.garnetContainer,
+    onErrorContainer: AppPalette.garnet,
+    surface: AppPalette.white,
+    onSurface: AppPalette.text,
+    onSurfaceVariant: AppPalette.muted,
+    surfaceContainerLowest: Colors.white,
+    surfaceContainerLow: Colors.white,
+    surfaceContainer: Color(0xFFF4F8F3),
+    surfaceContainerHigh: Color(0xFFEEF3ED),
+    surfaceContainerHighest: AppPalette.greenContainer,
+    outline: Color(0xFF8A968A),
+    outlineVariant: AppPalette.line,
+    inverseSurface: AppPalette.text,
+    onInverseSurface: AppPalette.white,
+    inversePrimary: AppPalette.gold,
+  );
+
+  static ThemeData _build(ColorScheme scheme, CheckColors checks) {
     final base = ThemeData(
       colorScheme: scheme,
-      brightness: Brightness.light,
+      brightness: scheme.brightness,
       fontFamily: 'Inter',
       visualDensity: VisualDensity.standard,
     );
@@ -84,7 +151,7 @@ class AppTheme {
           FontWeight.w600,
         )?.copyWith(fontSize: 17),
       ),
-      extensions: const [CheckColors.light],
+      extensions: [checks],
       appBarTheme: AppBarTheme(
         backgroundColor: AppPalette.green,
         foregroundColor: Colors.white,
@@ -195,6 +262,15 @@ class CheckColors extends ThemeExtension<CheckColors> {
   final Color problemContainer;
   final Color skipped;
   final Color skippedContainer;
+
+  static const dark = CheckColors(
+    ok: Color(0xFF5E8A5C),
+    okContainer: AppPalette.darkGreenContainer,
+    problem: Color(0xFFC4552A),
+    problemContainer: AppPalette.darkRustContainer,
+    skipped: AppPalette.darkMuted,
+    skippedContainer: Color(0xFF263026),
+  );
 
   static const light = CheckColors(
     ok: AppPalette.green,

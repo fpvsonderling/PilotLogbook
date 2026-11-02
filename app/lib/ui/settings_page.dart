@@ -127,14 +127,87 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         const SizedBox(height: 24),
-        Text(
-          key: const Key('app-version'),
-          'Pilot Logbook $appVersion',
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
+        Text('Theme', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        const _ThemeSwitch(),
+        const SizedBox(height: 24),
+        const _About(),
       ],
+    );
+  }
+}
+
+/// Light / dark / follow the device. Saved on this device only.
+class _ThemeSwitch extends StatelessWidget {
+  const _ThemeSwitch();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Services.of(context).theme;
+    return ValueListenableBuilder(
+      valueListenable: theme,
+      builder: (context, mode, _) => SegmentedButton<ThemeMode>(
+        key: const Key('theme-switch'),
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: ThemeMode.light,
+            icon: Icon(Icons.light_mode),
+            label: Text('Light'),
+          ),
+          ButtonSegment(
+            value: ThemeMode.dark,
+            icon: Icon(Icons.dark_mode),
+            label: Text('Dark'),
+          ),
+          ButtonSegment(
+            value: ThemeMode.system,
+            icon: Icon(Icons.brightness_auto),
+            label: Text('System'),
+          ),
+        ],
+        selected: {mode},
+        onSelectionChanged: (s) => theme.value = s.first,
+      ),
+    );
+  }
+}
+
+/// Who made the app, and its version.
+class _About extends StatelessWidget {
+  const _About();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    return Card(
+      key: const Key('about'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('About', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text('Author: Pavlo Yavorskyi'),
+            const SizedBox(height: 4),
+            const Text('Co-author: Claude (Anthropic)'),
+            const SizedBox(height: 4),
+            Text(
+              'Written with the help of Claude, an AI assistant.',
+              style: muted,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              key: const Key('app-version'),
+              'Pilot Logbook $appVersion',
+              style: muted,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
