@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 import '../data/local_db.dart';
 import '../data/logbook.dart';
@@ -11,12 +11,16 @@ class Services extends InheritedWidget {
     required this.db,
     required this.logbook,
     required this.sync,
+    required this.theme,
     required super.child,
   });
 
   final LocalDb db;
   final Logbook logbook;
   final SyncService sync;
+
+  /// Light / dark / system, chosen in Settings and saved on this device.
+  final ValueNotifier<ThemeMode> theme;
 
   static Services of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Services>()!;
@@ -29,7 +33,7 @@ class Services extends InheritedWidget {
 
   @override
   bool updateShouldNotify(Services oldWidget) =>
-      db != oldWidget.db || sync != oldWidget.sync;
+      db != oldWidget.db || sync != oldWidget.sync || theme != oldWidget.theme;
 }
 
 /// Rebuilds [builder] whenever the local database or the sync state (such

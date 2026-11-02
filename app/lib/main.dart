@@ -38,6 +38,14 @@ class PilotLogbookApp extends StatefulWidget {
 class _PilotLogbookAppState extends State<PilotLogbookApp>
     with WidgetsBindingObserver {
   late final SyncService _sync = widget.sync ?? SyncService(widget.db);
+  late final ValueNotifier<ThemeMode> _theme = ValueNotifier(
+    ThemeChoice.parse(widget.db.setting(ThemeChoice.settingsKey)),
+  )..addListener(_saveTheme);
+
+  void _saveTheme() => widget.db.setSetting(
+    ThemeChoice.settingsKey,
+    ThemeChoice.store(_theme.value),
+  );
 
   @override
   void initState() {
@@ -49,6 +57,7 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _theme.dispose();
     super.dispose();
   }
 
@@ -64,11 +73,17 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
       db: widget.db,
       logbook: Logbook(widget.db),
       sync: _sync,
-      child: MaterialApp(
-        title: 'Pilot Logbook',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.light(),
-        home: const HomePage(),
+      theme: _theme,
+      child: ValueListenableBuilder(
+        valueListenable: _theme,
+        builder: (context, mode, _) => MaterialApp(
+          title: 'Pilot Logbook',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light(),
+          darkTheme: AppTheme.dark(),
+          themeMode: mode,
+          home: const HomePage(),
+        ),
       ),
     );
   }
