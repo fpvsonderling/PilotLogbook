@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'data/documents.dart';
 import 'data/local_db.dart';
 import 'data/logbook.dart';
 import 'data/photos.dart';
@@ -15,10 +16,11 @@ Future<void> main() async {
   final dir = await getApplicationSupportDirectory();
   final db = LocalDb.open(p.join(dir.path, 'pilot_logbook.sqlite'));
   final photos = PhotoStore(p.join(dir.path, 'photos'));
+  final documents = DocumentStore(p.join(dir.path, 'documents'));
   runApp(
     PilotLogbookApp(
       db: db,
-      sync: SyncService(db, photos: photos),
+      sync: SyncService(db, photos: photos, documents: documents),
     ),
   );
 }

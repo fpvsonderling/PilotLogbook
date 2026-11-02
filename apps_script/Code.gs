@@ -36,13 +36,19 @@ const SCHEMA = {
   fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
   maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
-  documents: ['title', 'url', 'notes'],
+  documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version'],
 };
 // SCHEMA-END
 
 const SYSTEM_COLUMNS = ['id', 'updated_at', 'server_seq', 'deleted', 'created_by'];
 const BACKUP_FOLDER = 'PilotLogbook Backups';
 const PHOTO_FOLDER = 'PilotLogbook Photos';
+const DOCUMENT_FOLDER = 'PilotLogbook Documents';
+// Tables only the admin link may add to, change or delete.
+const ADMIN_ONLY_TABLES = ['documents'];
+// Documents go to the app in pieces of this many bytes, so big manuals fit
+// in one answer each.
+const DOCUMENT_PART = 8 * 1024 * 1024;
 
 // ------------------------------------------------------------------ setup
 
@@ -101,12 +107,18 @@ function adminToken_() {
   return token;
 }
 
-/** Monthly backup on the 1st at about 03:00 (the spreadsheet's time zone). */
+/**
+ * Monthly backup on the 1st at about 03:00 (the spreadsheet's time zone),
+ * and every hour a look for documents changed in Drive.
+ */
 function installTriggers() {
   ScriptApp.getProjectTriggers()
-    .filter(function (t) { return t.getHandlerFunction() === 'monthlyBackup'; })
+    .filter(function (t) {
+      return ['monthlyBackup', 'refreshDocuments'].indexOf(t.getHandlerFunction()) >= 0;
+    })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('monthlyBackup').timeBased().onMonthDay(1).atHour(3).create();
+  ScriptApp.newTrigger('refreshDocuments').timeBased().everyHours(1).create();
 }
 
 function ensureSheet_(table, formatAll) {
@@ -170,6 +182,12 @@ function doPost(e) {
     }
     if (req.action === 'uploadPhoto') return json_(uploadPhoto_(req));
     if (req.action === 'photo') return json_(photo_(String(req.drive_file_id || '')));
+    if (req.action === 'documentUpload' || req.action === 'documentInfo') {
+      if (!user.admin) return json_({ ok: false, error: 'Only the admin can add documents' });
+      if (req.action === 'documentUpload') return json_(documentUpload_(req));
+      return json_(documentInfo_(String(req.drive_file_id || '')));
+    }
+    if (req.action === 'documentPart') return json_(documentPart_(req));
     return json_({ ok: false, error: 'Unknown action ' + req.action });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -256,6 +274,11 @@ function sync_(req, user) {
       incoming.forEach(function (row) {
         if (!row.id) return;
         const at = rowById[row.id];
+        if (!admin && ADMIN_ONLY_TABLES.indexOf(table) >= 0) {
+          if (at !== undefined) rejected.push(at);
+          denied[table].push(row.id);
+          return;
+        }
         const own = at !== undefined && !!me && text_(values[at][col.created_by]) === me;
         if (!admin && (at !== undefined
           ? text_(values[at][col.updated_at]) !== String(row.updated_at) && !own
@@ -496,6 +519,145 @@ function photoIds_() {
   const col = header.indexOf('drive_file_id');
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues()
     .map(function (r) { return String(r[col]); });
+}
+
+// -------------------------------------------------------------- documents
+
+/**
+ * Starts an upload of a document into the Drive folder DOCUMENT_FOLDER and
+ * returns Drive's one-time upload address; the admin's app sends the file
+ * straight there, so its size is not limited by this script. The app then
+ * asks documentInfo for the new file.
+ */
+function documentUpload_(req) {
+  const name = String(req.name || 'document');
+  const mime = String(req.mimeType || 'application/octet-stream');
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+    method: 'post',
+    contentType: 'application/json; charset=UTF-8',
+    headers: {
+      Authorization: 'Bearer ' + ScriptApp.getOAuthToken(),
+      'X-Upload-Content-Type': mime,
+      'X-Upload-Content-Length': String(Number(req.size) || 0),
+    },
+    payload: JSON.stringify({ name: name, mimeType: mime, parents: [folder_(DOCUMENT_FOLDER).getId()] }),
+    muteHttpExceptions: true,
+  });
+  const headers = res.getAllHeaders();
+  const location = headers.Location || headers.location;
+  if (res.getResponseCode() !== 200 || !location) {
+    return { ok: false, error: 'Drive refused the upload (' + res.getResponseCode() + ')' };
+  }
+  return { ok: true, upload_url: location };
+}
+
+/**
+ * What the app stores about a Drive file: name, type, size and version
+ * (last change). Google Docs, Sheets and Slides are handed out as PDF.
+ */
+function documentInfo_(fileId) {
+  if (!fileId) return { ok: false, error: 'No Drive file' };
+  let file;
+  try {
+    file = DriveApp.getFileById(fileId);
+  } catch (err) {
+    return { ok: false, error: 'This Drive file cannot be opened by the logbook\'s Google account' };
+  }
+  const google = isGoogleFile_(file);
+  return {
+    ok: true,
+    drive_file_id: fileId,
+    file_name: google ? file.getName() + '.pdf' : file.getName(),
+    mime_type: google ? 'application/pdf' : file.getMimeType(),
+    size_bytes: google ? '' : String(file.getSize()),
+    file_version: file.getLastUpdated().toISOString(),
+    url: file.getUrl(),
+  };
+}
+
+function isGoogleFile_(file) {
+  return String(file.getMimeType()).indexOf('application/vnd.google-apps') === 0;
+}
+
+/**
+ * One piece of a document, base64, from byte `offset` (at most `length`
+ * bytes, DOCUMENT_PART by default); `size` is the whole file's. Only files listed in the documents tab, so a link cannot read
+ * other Drive files.
+ */
+function documentPart_(req) {
+  const fileId = String(req.drive_file_id || '');
+  if (!fileId || documentIds_().indexOf(fileId) < 0) return { ok: false, error: 'Unknown document' };
+  const file = DriveApp.getFileById(fileId);
+  const version = file.getLastUpdated().toISOString();
+  if (isGoogleFile_(file)) {
+    const bytes = file.getAs('application/pdf').getBytes();
+    return { ok: true, offset: 0, size: bytes.length, version: version, data: Utilities.base64Encode(bytes) };
+  }
+  const size = Number(file.getSize());
+  const offset = Math.max(0, Number(req.offset) || 0);
+  if (offset >= size) return { ok: true, offset: offset, size: size, version: version, data: '' };
+  const length = Math.min(Number(req.length) || DOCUMENT_PART, DOCUMENT_PART);
+  const end = Math.min(offset + length, size) - 1;
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + offset + '-' + end },
+    muteHttpExceptions: true,
+  });
+  const code = res.getResponseCode();
+  if (code !== 200 && code !== 206) return { ok: false, error: 'Drive answered ' + code };
+  let bytes = res.getContent();
+  // A server that ignores Range sends the whole file.
+  if (code === 200 && offset > 0) bytes = bytes.slice(offset, end + 1);
+  return { ok: true, offset: offset, size: size, version: version, data: Utilities.base64Encode(bytes) };
+}
+
+/** Drive ids of the documents not deleted. */
+function documentIds_() {
+  const sheet = ensureSheet_('documents', false);
+  if (sheet.getLastRow() < 2) return [];
+  const header = readHeader_(sheet);
+  const col = header.indexOf('drive_file_id');
+  const del = header.indexOf('deleted');
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues()
+    .filter(function (r) { return String(r[del]) !== '1'; })
+    .map(function (r) { return String(r[col]); })
+    .filter(String);
+}
+
+/**
+ * Hourly trigger: a document changed in Drive gets its new version and size
+ * in the documents tab, so every app downloads it again on its next sync.
+ */
+function refreshDocuments() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = ensureSheet_('documents', false);
+    if (sheet.getLastRow() < 2) return 0;
+    const header = readHeader_(sheet);
+    const col = {};
+    header.forEach(function (name, i) { col[name] = i; });
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues();
+    const props = PropertiesService.getScriptProperties();
+    let seq = Number(props.getProperty('SEQ') || 0);
+    const changed = {};
+    values.forEach(function (r, i) {
+      const id = String(r[col.drive_file_id] || '');
+      if (!id || String(r[col.deleted]) === '1') return;
+      const info = documentInfo_(id);
+      if (!info.ok || info.file_version === text_(r[col.file_version])) return;
+      seq += 1;
+      r[col.file_version] = info.file_version;
+      r[col.size_bytes] = info.size_bytes;
+      r[col.updated_at] = new Date().toISOString();
+      r[col.server_seq] = String(seq);
+      changed[i] = true;
+    });
+    writeChanged_(sheet, values, changed, values.length);
+    props.setProperty('SEQ', String(seq));
+    return Object.keys(changed).length;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ------------------------------------------------- old fault reports import

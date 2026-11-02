@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../documents.dart';
 import '../local_db.dart';
 import '../photos.dart';
 import '../schema.dart';
@@ -76,12 +77,16 @@ class SyncResult {
 /// One sync = upload every dirty row, then download every row the
 /// spreadsheet changed since the last sync, in a single request.
 class SyncService extends ChangeNotifier {
-  SyncService(this.db, {this.photos});
+  SyncService(this.db, {this.photos, this.documents});
 
   final LocalDb db;
 
   /// Where fault photos are kept; without it photos are not uploaded.
   final PhotoStore? photos;
+
+  /// Where offline copies of documents are kept; without it documents are
+  /// not downloaded.
+  final DocumentStore? documents;
 
   bool _running = false;
   bool get running => _running;
@@ -91,6 +96,10 @@ class SyncService extends ChangeNotifier {
   static const urlKey = 'script_url';
   static const tokenKey = 'script_token';
   static const adminKey = 'is_admin';
+
+  /// '0' when this device downloads documents only when they are opened;
+  /// otherwise every document is downloaded after each sync.
+  static const documentsOfflineKey = 'documents_offline';
 
   String? get url => db.setting(urlKey);
 
@@ -161,6 +170,7 @@ class SyncService extends ChangeNotifier {
     try {
       final result = await _sync(transportFactory(url!));
       lastSyncedAt = DateTime.now();
+      _afterSync();
       return result;
     } catch (e) {
       lastError = e.toString();
@@ -223,6 +233,174 @@ class SyncService extends ChangeNotifier {
       }
     });
     return SyncResult(pushed: pushed, pulled: pulled);
+  }
+
+  // ------------------------------------------------------------ documents
+
+  /// Download progress (0..1) of documents being fetched now, by row id.
+  final downloads = <String, double>{};
+
+  /// Why the last download of a document failed, by row id.
+  final downloadErrors = <String, String>{};
+
+  bool get keepDocumentsOffline => db.setting(documentsOfflineKey) != '0';
+
+  set keepDocumentsOffline(bool value) {
+    db.setSetting(documentsOfflineKey, value ? '1' : '0');
+    notifyListeners();
+    if (value) downloadAllDocuments();
+  }
+
+  /// Sends a file to Drive the way the admin's app does: the script starts
+  /// the upload and gives an address, the file goes straight there, and
+  /// Drive answers with the new file. Replaced in tests.
+  Future<Map<String, Object?>> Function(
+    String uploadUrl,
+    File file,
+    String mime,
+  )
+  uploader = _put;
+
+  static Future<Map<String, Object?>> _put(
+    String uploadUrl,
+    File file,
+    String mime,
+  ) async {
+    final request = http.StreamedRequest('PUT', Uri.parse(uploadUrl))
+      ..headers['Content-Type'] = mime
+      ..contentLength = await file.length();
+    file.openRead().listen(
+      request.sink.add,
+      onDone: request.sink.close,
+      onError: request.sink.addError,
+    );
+    final response = await http.Response.fromStream(await request.send());
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw SyncException('Drive upload failed: HTTP ${response.statusCode}');
+    }
+    return (jsonDecode(response.body) as Map).cast<String, Object?>();
+  }
+
+  /// Uploads [file] to the documents folder in Drive (admin link only) and
+  /// returns the columns to save in its documents row.
+  Future<Map<String, Object?>> uploadDocument(File file) async {
+    if (!configured) throw SyncException('Sync is not set up');
+    final name = file.uri.pathSegments.last;
+    final mime = mimeTypeOf(name);
+    final transport = transportFactory(url!);
+    final start = await transport({
+      'action': 'documentUpload',
+      'token': token,
+      'name': name,
+      'mimeType': mime,
+      'size': await file.length(),
+    });
+    final created = await uploader(start['upload_url'] as String, file, mime);
+    return documentInfo(created['id'] as String);
+  }
+
+  /// Name, type, size and version of a Drive file the admin links.
+  Future<Map<String, Object?>> documentInfo(String driveFileId) async {
+    if (!configured) throw SyncException('Sync is not set up');
+    final info = await transportFactory(url!)({
+      'action': 'documentInfo',
+      'token': token,
+      'drive_file_id': driveFileId,
+    });
+    return {
+      'drive_file_id': info['drive_file_id'],
+      'file_name': info['file_name'],
+      'mime_type': info['mime_type'],
+      'size_bytes': int.tryParse('${info['size_bytes'] ?? ''}'),
+      'file_version': info['file_version'],
+      'url': info['url'],
+    };
+  }
+
+  /// The document's file on this device, downloaded first when there is no
+  /// copy of its current version. Offline, an older copy is better than
+  /// none. Null when there is no file to be had now.
+  Future<File?> documentFile(DbRow row) async {
+    final store = documents;
+    if (store == null) return null;
+    final have = store.cached(row);
+    if (have != null) return have;
+    final got = await _download(row);
+    if (got != null) return got;
+    final old = store.folder(row['id'] as String);
+    if (!old.existsSync()) return null;
+    for (final f in old.listSync().whereType<File>()) {
+      if (!f.uri.pathSegments.last.startsWith('.')) return f;
+    }
+    return null;
+  }
+
+  /// Downloads every document this device has no current copy of.
+  Future<void> downloadAllDocuments() async {
+    final store = documents;
+    if (store == null) return;
+    for (final row in db.rows(Tables.documents)) {
+      if ((row['drive_file_id'] as String? ?? '').isEmpty) continue;
+      if (store.cached(row) == null) await _download(row);
+    }
+  }
+
+  void _afterSync() {
+    final store = documents;
+    if (store == null) return;
+    try {
+      store.prune([
+        for (final r in db.rows(Tables.documents)) r['id'] as String,
+      ]);
+    } catch (_) {
+      // A file kept open by another program; tried again next sync.
+    }
+    if (keepDocumentsOffline) downloadAllDocuments();
+  }
+
+  Future<File?> _download(DbRow row) async {
+    final store = documents;
+    final id = row['id'] as String;
+    final driveId = row['drive_file_id'] as String? ?? '';
+    if (store == null || driveId.isEmpty || !configured) return null;
+    if (downloads.containsKey(id)) return null;
+    downloads[id] = 0;
+    downloadErrors.remove(id);
+    notifyListeners();
+    final part = store.partFile(row);
+    IOSink? sink;
+    try {
+      part.parent.createSync(recursive: true);
+      sink = part.openWrite();
+      final transport = transportFactory(url!);
+      var offset = 0;
+      while (true) {
+        final answer = await transport({
+          'action': 'documentPart',
+          'token': token,
+          'drive_file_id': driveId,
+          'offset': offset,
+        });
+        final bytes = base64Decode(answer['data'] as String? ?? '');
+        final size = (answer['size'] as num?)?.toInt() ?? 0;
+        sink.add(bytes);
+        offset += bytes.length;
+        downloads[id] = size > 0 ? offset / size : 1;
+        notifyListeners();
+        if (bytes.isEmpty || offset >= size) break;
+      }
+      await sink.close();
+      sink = null;
+      return store.finish(row);
+    } catch (e) {
+      downloadErrors[id] = e.toString();
+      await sink?.close();
+      if (part.existsSync()) part.deleteSync();
+      return null;
+    } finally {
+      downloads.remove(id);
+      notifyListeners();
+    }
   }
 
   /// Sends photos taken on this device to Drive and notes their file id, so
