@@ -61,6 +61,9 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   if (standalone && !fresh) props.SPREADSHEET_ID = 'ss1';
   const oldSheets = {};
   const driveFiles = [];
+  // Drive files the documents tests use: id -> { name, mime, bytes, updated }.
+  const docs = {};
+  const fetches = [];
   const spreadsheet = {
     getId: () => 'ss1',
     getName: () => 'Pilot Logbook',
@@ -94,9 +97,10 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
     ScriptApp: {
       getService: () => ({ getUrl: () => serviceUrl }),
       getProjectTriggers: () => [],
+      getOAuthToken: () => 'oauth',
       deleteTrigger() {},
       newTrigger: () => {
-        const b = { timeBased: () => b, onMonthDay: () => b, atHour: () => b, create: () => b };
+        const b = { timeBased: () => b, onMonthDay: () => b, atHour: () => b, everyHours: () => b, create: () => b };
         return b;
       },
     },
@@ -113,18 +117,45 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
     DriveApp: {
       getFoldersByName: () => ({ hasNext: () => false }),
       createFolder: (name) => ({
+        getId: () => 'folder-' + name,
         createFile: (blob) => ({ getId: () => 'f-' + blob.name, getUrl: () => 'https://drive/' + blob.name }),
       }),
-      getFileById: (id) => ({
+      getFileById: (id) => {
+        const d = docs[id];
+        if (d) {
+          return {
+            getName: () => d.name,
+            getMimeType: () => d.mime,
+            getSize: () => d.bytes.length,
+            getLastUpdated: () => new Date(d.updated),
+            getUrl: () => 'https://drive/' + id,
+            getAs: () => ({ getBytes: () => Array.from(Buffer.from('pdf-of-' + d.name)) }),
+          };
+        }
+        if (id.startsWith('missing')) throw new Error('No item with the given ID');
+        return {
         makeCopy: (name) => files.push(name),
         getBlob: () => ({ getContentType: () => 'image/jpeg', getBytes: () => 'bytes-of-' + id }),
-      }),
+        };
+      },
       getFilesByName: (name) => {
         const found = driveFiles.includes(name);
         return { hasNext: () => found, next: () => ({ getId: () => 'drive-' + name, getUrl: () => 'https://drive/' + name }) };
       },
     },
     Logger: { log() {} },
+    UrlFetchApp: {
+      fetch: (url, opts) => {
+        fetches.push({ url, opts });
+        if (url.includes('/upload/drive/')) {
+          return { getResponseCode: () => 200, getAllHeaders: () => ({ Location: 'https://upload/session-1' }) };
+        }
+        const id = decodeURIComponent(url.split('/files/')[1].split('?')[0]);
+        const [a, b] = opts.headers.Range.replace('bytes=', '').split('-').map(Number);
+        return { getResponseCode: () => 206, getContent: () => docs[id].bytes.slice(a, b + 1) };
+      },
+    },
+    Buffer,
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8'), ctx);
@@ -132,7 +163,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const send = (token) => (body) =>
     JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token, ...body }) } }).text);
   // token-1 is the pilots' link, token-2 the admin link.
-  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets, driveFiles };
+  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets, driveFiles, docs, fetches };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -573,4 +604,84 @@ test('Inspection LogBook rows become inspection flights; drones get their usage'
   assert.strictEqual(rowsOf(sheets.flights).length, 2);
   assert.strictEqual(rowsOf(sheets.aircraft).length, 2);
   assert.strictEqual(rowsOf(sheets.people).length, 2);
+});
+
+const doc = (id, updatedAt, extra = {}) => ({
+  id,
+  updated_at: updatedAt,
+  server_seq: null,
+  deleted: 0,
+  title: 'Operations Manual',
+  drive_file_id: 'd1',
+  ...extra,
+});
+
+test('only the admin link adds, changes and deletes documents', () => {
+  const { post, pilot } = load();
+  const p = pilot({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T10:00:00Z')] }, since: {} });
+  assert.deepStrictEqual(p.denied.documents, ['doc1']);
+  assert.strictEqual(p.accepted.documents.length, 0);
+  const a = post({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T10:00:00Z')] }, since: {} });
+  assert.strictEqual(a.accepted.documents.length, 1);
+  const del = pilot({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T11:00:00Z', { deleted: 1 })] }, since: { documents: 99 } });
+  assert.deepStrictEqual(del.denied.documents, ['doc1']);
+  assert.strictEqual(del.pulled.documents[0].deleted, '0');
+  assert.strictEqual(pilot({ action: 'documentUpload', name: 'a.pdf', size: 3 }).ok, false);
+  assert.strictEqual(pilot({ action: 'documentInfo', drive_file_id: 'd1' }).ok, false);
+});
+
+test('the admin starts a document upload into the documents folder', () => {
+  const { post, fetches } = load();
+  const r = post({ action: 'documentUpload', name: 'OM.pdf', mimeType: 'application/pdf', size: 1234 });
+  assert.strictEqual(r.upload_url, 'https://upload/session-1');
+  const body = JSON.parse(fetches[0].opts.payload);
+  assert.deepStrictEqual(body.parents, ['folder-PilotLogbook Documents']);
+  assert.strictEqual(fetches[0].opts.headers['X-Upload-Content-Length'], '1234');
+});
+
+test('document info: Drive files as they are, Google Docs as PDF', () => {
+  const { post, docs } = load();
+  docs.d1 = { name: 'OM.pdf', mime: 'application/pdf', bytes: [1, 2, 3], updated: '2026-11-01T08:00:00Z' };
+  docs.g1 = { name: 'Checklist', mime: 'application/vnd.google-apps.document', bytes: [], updated: '2026-11-01T09:00:00Z' };
+  const a = post({ action: 'documentInfo', drive_file_id: 'd1' });
+  assert.deepStrictEqual(
+    [a.file_name, a.mime_type, a.size_bytes, a.file_version],
+    ['OM.pdf', 'application/pdf', '3', '2026-11-01T08:00:00.000Z'],
+  );
+  const g = post({ action: 'documentInfo', drive_file_id: 'g1' });
+  assert.deepStrictEqual([g.file_name, g.mime_type], ['Checklist.pdf', 'application/pdf']);
+  assert.strictEqual(post({ action: 'documentInfo', drive_file_id: 'missing1' }).ok, false);
+});
+
+test('a document is sent in pieces, only when the documents tab lists it', () => {
+  const { post, pilot, docs } = load();
+  const bytes = Array.from({ length: 20 }, (_, i) => i);
+  docs.d1 = { name: 'OM.pdf', mime: 'application/pdf', bytes, updated: '2026-11-01T08:00:00Z' };
+  assert.strictEqual(pilot({ action: 'documentPart', drive_file_id: 'd1', offset: 0 }).ok, false);
+  post({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T10:00:00Z')] }, since: {} });
+  const first = pilot({ action: 'documentPart', drive_file_id: 'd1', offset: 0 });
+  assert.strictEqual(first.size, 20);
+  assert.strictEqual(first.version, '2026-11-01T08:00:00.000Z');
+  assert.deepStrictEqual(first.data, bytes);
+  const piece = pilot({ action: 'documentPart', drive_file_id: 'd1', offset: 8, length: 8 });
+  assert.deepStrictEqual(piece.data, bytes.slice(8, 16));
+  const end = pilot({ action: 'documentPart', drive_file_id: 'd1', offset: 20 });
+  assert.deepStrictEqual(end.data, '');
+  post({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T11:00:00Z', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(pilot({ action: 'documentPart', drive_file_id: 'd1', offset: 0 }).ok, false);
+});
+
+test('refreshDocuments gives a document changed in Drive its new version', () => {
+  const { ctx, post, docs } = load();
+  docs.d1 = { name: 'OM.pdf', mime: 'application/pdf', bytes: [1, 2], updated: '2026-11-01T08:00:00Z' };
+  post({ action: 'sync', push: { documents: [doc('doc1', '2026-11-02T10:00:00Z', { file_version: '2026-11-01T08:00:00.000Z' })] }, since: {} });
+  assert.strictEqual(ctx.refreshDocuments(), 0);
+  docs.d1 = { name: 'OM.pdf', mime: 'application/pdf', bytes: [1, 2, 3, 4], updated: '2026-11-02T12:00:00Z' };
+  assert.strictEqual(ctx.refreshDocuments(), 1);
+  const r = post({ action: 'sync', push: {}, since: { documents: 1 } });
+  assert.strictEqual(r.pulled.documents.length, 1);
+  assert.deepStrictEqual(
+    [r.pulled.documents[0].file_version, r.pulled.documents[0].size_bytes],
+    ['2026-11-02T12:00:00.000Z', '4'],
+  );
 });
