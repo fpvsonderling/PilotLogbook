@@ -218,6 +218,40 @@ void main() {
     );
   });
 
+  test('Statistic counts a person apart as RP, PA and spotter', () {
+    final db = LocalDb.inMemory();
+    final logbook = Logbook(db);
+    final pavlo = db.save(Tables.people, {'name': 'Pavlo'});
+    final emil = db.save(Tables.people, {'name': 'Emil'});
+    db.save(Tables.flights, {
+      'rp_id': pavlo,
+      'spotter_id': emil,
+      'duration_s': 200,
+    });
+    db.save(Tables.flights, {'rp_id': pavlo, 'duration_s': 100});
+    db.save(Tables.flights, {
+      'rp_id': emil,
+      'pa_id': pavlo,
+      'duration_s': 50,
+    });
+    db.save(Tables.flights, {'rp_id': emil, 'spotter_id': pavlo});
+    db.save(Tables.flights, {'rp_id': emil});
+    final gone = db.save(Tables.flights, {'rp_id': pavlo});
+    db.delete(Tables.flights, gone);
+
+    final f = TableFilter(chosen: {'pilot': pavlo});
+    final r = logbook.personRoles(pavlo, f);
+    expect((r.rp.flights, r.rp.seconds), (2, 300));
+    expect((r.pa.flights, r.pa.seconds), (1, 50));
+    expect(r.spotter.flights, 1);
+    expect(logbook.totals(f).all.flights, 4);
+    expect(
+      [for (final p in logbook.paStats()) (p.name, p.flights, p.seconds)],
+      [('Pavlo', 1, 50)],
+    );
+    expect(logbook.personRoles(emil).rp.flights, 3);
+  });
+
   test('What splits into its picks, old spellings included', () {
     expect(missionParts('Double, Aborted'), ['Double', 'Aborted']);
     expect(missionParts(' Double , near-miss,'), ['Double', 'Near miss']);
