@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/maintenance.dart';
+import 'package:pilot_logbook/data/maintenance_guide.dart';
 import 'package:pilot_logbook/data/schema.dart';
 import 'package:pilot_logbook/main.dart';
 
@@ -153,7 +156,19 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('guide-arm_assembly')));
     await tester.pumpAndSettle();
-    expect(find.text('Arm Assembly'), findsWidgets);
+    expect(find.text('Arm Assembly GVI'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  test('every assembly has an instruction and its pictures exist', () {
+    for (final s in maintenanceSections) {
+      final guide = maintenanceGuides[s.column];
+      expect(guide?.tasks, isNotEmpty, reason: s.column);
+      for (final t in guide!.tasks) {
+        for (final image in t.images) {
+          expect(File(image).existsSync(), isTrue, reason: image);
+        }
+      }
+    }
   });
 }
