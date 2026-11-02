@@ -105,6 +105,8 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       formatDate: () => '2026-11',
       base64Decode: (s) => s,
       base64Encode: (s) => s,
+      Charset: { UTF_8: 'utf8' },
+      base64EncodeWebSafe: (s) => Buffer.from(s, 'utf8').toString('base64url') + '==',
       newBlob: (data, type, name) => ({ data, type, name }),
     },
     Session: { getScriptTimeZone: () => 'UTC' },
@@ -248,6 +250,7 @@ test('a pilot adds rows but cannot change or delete them', () => {
 
 test('a person\'s own link changes and deletes only that person\'s rows', () => {
   const { post, sheets, ctx } = load();
+  post({ action: 'sync', push: { people: [{ id: 'p-anna', updated_at: 't0', deleted: 0, name: 'Anna', roles: 'pilot', active: 1 }] }, since: {} });
   const link = post({ action: 'personLink', person_id: 'p-anna' });
   assert.strictEqual(link.ok, true);
   // Asking again gives the same link.
@@ -282,14 +285,111 @@ test('a person\'s own link changes and deletes only that person\'s rows', () => 
   assert.strictEqual(row('a')[h.indexOf('deleted')], '1');
 });
 
-test('connectionLink gives the web app URL with the access token', () => {
+const decodeKey = (key) => {
+  assert.match(key, /^PL1-[A-Za-z0-9_-]+$/);
+  return Buffer.from(key.slice(4), 'base64url').toString('utf8');
+};
+
+test('connectionLink gives an access key: web app id and token, no URL', () => {
   const { ctx } = load();
-  assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
+  const key = ctx.connectionLink();
+  assert.ok(!key.includes('script.google.com'));
+  assert.strictEqual(decodeKey(key), 'abc token-1');
 });
 
-test('connectionLink turns the editor /dev URL into the deployed /exec URL', () => {
+test('connectionLink uses the deployed /exec id when run from the editor', () => {
   const { ctx } = load({ serviceUrl: 'https://script.google.com/macros/s/abc/dev' });
-  assert.strictEqual(ctx.connectionLink(), 'https://script.google.com/macros/s/abc/exec?key=token-1');
+  assert.strictEqual(decodeKey(ctx.connectionLink()), 'abc token-1');
+});
+
+test('an unusual web app URL goes into the key whole', () => {
+  const { ctx } = load({ serviceUrl: 'https://script.google.com/a/macros/firm.pl/s/abc/exec' });
+  assert.strictEqual(decodeKey(ctx.connectionLink()), 'https://script.google.com/a/macros/firm.pl/s/abc/exec token-1');
+});
+
+const person = (id, extra = {}) => ({ id, updated_at: 't0', server_seq: null, deleted: 0, name: id, roles: 'pilot', active: 1, ...extra });
+
+function withPerson(roles, extra = {}) {
+  const loaded = load();
+  loaded.post({ action: 'sync', push: { people: [person('p-anna', { roles, ...extra })] }, since: {} });
+  const link = loaded.post({ action: 'personLink', person_id: 'p-anna' });
+  const anna = (body) =>
+    JSON.parse(loaded.ctx.doPost({ postData: { contents: JSON.stringify({ token: link.token, ...body }) } }).text);
+  return { ...loaded, link, anna };
+}
+
+test('personLink answers with the person\'s access key', () => {
+  const { link } = withPerson('pilot');
+  assert.strictEqual(decodeKey(link.key), 'abc ' + link.token);
+});
+
+test('a viewer key reads everything but changes and adds nothing', () => {
+  const { anna, post, sheets } = withPerson('pilot,viewer');
+  post({ action: 'sync', push: { flights: [flight('a', 't1', { notes: 'x' })] }, since: {} });
+  const out = anna({
+    action: 'sync',
+    push: { flights: [flight('a', 't2', { notes: 'y' }), flight('new', 't2')] },
+    since: { flights: 0 },
+  });
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.readOnly, true);
+  assert.strictEqual(out.admin, false);
+  assert.deepStrictEqual(out.accepted.flights, []);
+  assert.deepStrictEqual(out.denied.flights, ['a', 'new']);
+  assert.strictEqual(out.pulled.flights.length, 1);
+  assert.strictEqual(out.pulled.flights[0].notes, 'x');
+  assert.strictEqual(sheets.flights.cells.length, 2);
+  assert.strictEqual(anna({ action: 'uploadPhoto', name: 'x.jpg', data: 'abc' }).ok, false);
+});
+
+test('a person with the admin role gets admin rights with their own key', () => {
+  const { anna, post } = withPerson('pilot,admin');
+  post({ action: 'sync', push: { flights: [flight('b', 't1', { created_by: 'p-bob' })] }, since: {} });
+  const out = anna({ action: 'sync', push: { flights: [flight('b', 't2', { deleted: 1 }), flight('c', 't2')] }, since: {} });
+  assert.strictEqual(out.admin, true);
+  assert.deepStrictEqual(out.accepted.flights.map((r) => r.id), ['b', 'c']);
+  // A row the admin adds is still marked as theirs.
+  assert.strictEqual(out.pulled.flights.find((r) => r.id === 'c').created_by, 'p-anna');
+  assert.strictEqual(anna({ action: 'personLink', person_id: 'p-bob' }).ok, true);
+});
+
+test('a person\'s key stops working when they are made inactive or deleted', () => {
+  const { anna, post } = withPerson('pilot');
+  assert.strictEqual(anna({ action: 'sync', push: {}, since: {} }).ok, true);
+  post({ action: 'sync', push: { people: [person('p-anna', { updated_at: 't1', active: 0 })] }, since: {} });
+  assert.strictEqual(anna({ action: 'sync', push: {}, since: {} }).ok, false);
+  post({ action: 'sync', push: { people: [person('p-anna', { updated_at: 't2', active: 1 })] }, since: {} });
+  assert.strictEqual(anna({ action: 'sync', push: {}, since: {} }).ok, true);
+  post({ action: 'sync', push: { people: [person('p-anna', { updated_at: 't3', deleted: 1 })] }, since: {} });
+  assert.strictEqual(anna({ action: 'sync', push: {}, since: {} }).ok, false);
+});
+
+test('a key for someone not in People does not work', () => {
+  const { post, ctx } = load();
+  const link = post({ action: 'personLink', person_id: 'p-ghost' });
+  const out = JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: link.token, action: 'sync' }) } }).text);
+  assert.strictEqual(out.ok, false);
+});
+
+test('renew makes a new key and turns the old one off', () => {
+  const { anna, post, link, ctx } = withPerson('pilot');
+  const fresh = post({ action: 'personLink', person_id: 'p-anna', renew: true });
+  assert.notStrictEqual(fresh.token, link.token);
+  assert.strictEqual(anna({ action: 'sync', push: {}, since: {} }).ok, false);
+  const out = JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token: fresh.token, action: 'sync', push: {}, since: {} }) } }).text);
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.me, 'p-anna');
+});
+
+test('disableSharedKey turns the shared pilots\' key off', () => {
+  const { ctx, pilot, post } = load();
+  assert.strictEqual(pilot({ action: 'sync', push: {}, since: {} }).ok, true);
+  ctx.disableSharedKey();
+  assert.strictEqual(pilot({ action: 'sync', push: {}, since: {} }).ok, false);
+  assert.strictEqual(post({ action: 'sync', push: {}, since: {} }).ok, true);
+  assert.strictEqual(decodeKey(ctx.connectionLink()), 'abc token-2');
+  ctx.enableSharedKey();
+  assert.strictEqual(pilot({ action: 'sync', push: {}, since: {} }).ok, true);
 });
 
 test('old daily checks: UA and GCS of the same drone and day become one check', () => {

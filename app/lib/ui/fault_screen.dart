@@ -60,7 +60,7 @@ class FaultScreen extends StatelessWidget {
         final open = c.status != FaultStatus.closed;
         return Scaffold(
           appBar: AppBar(title: Text(faultSubject(c, aircraft, batteries))),
-          bottomNavigationBar: open
+          bottomNavigationBar: open && services.canAdd
               ? SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(12),

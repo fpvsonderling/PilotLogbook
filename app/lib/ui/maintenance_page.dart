@@ -45,10 +45,12 @@ class _MaintenancePageState extends State<MaintenancePage> {
   Widget build(BuildContext context) {
     final services = Services.of(context);
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => openMaintenance(context),
-        icon: const Icon(Icons.engineering),
-        label: const Text('New maintenance'),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.extended(
+          onPressed: () => openMaintenance(context),
+          icon: const Icon(Icons.engineering),
+          label: const Text('New maintenance'),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {

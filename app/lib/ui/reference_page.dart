@@ -39,7 +39,17 @@ class ReferencePage extends StatelessWidget {
   );
 }
 
-const personRoles = ['pilot', 'spotter', 'technician', 'signatory', 'admin'];
+const personRoles = [
+  'pilot',
+  'spotter',
+  'technician',
+  'signatory',
+  'admin',
+  'viewer',
+];
+
+/// A viewer's key reads everything and changes nothing.
+String roleLabel(String role) => role == 'viewer' ? 'viewer (read only)' : role;
 
 class _ReferenceList extends StatelessWidget {
   const _ReferenceList({required this.table});
@@ -79,10 +89,12 @@ class _ReferenceList extends StatelessWidget {
     final services = Services.of(context);
     final db = services.db;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.small(
-        tooltip: 'Add',
-        onPressed: () => _edit(context, null),
-        child: const Icon(Icons.add),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.small(
+          tooltip: 'Add',
+          onPressed: () => _edit(context, null),
+          child: const Icon(Icons.add),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {
@@ -133,29 +145,52 @@ class _ReferenceList extends StatelessWidget {
               .map((r) => r.trim())
               .where((r) => r.isNotEmpty)
               .toSet();
+          final active = SwitchListTile(
+            key: const Key('reference-active'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Active'),
+            value: values['active'] == 1,
+            onChanged: (on) => setState(() => values['active'] = on ? 1 : 0),
+          );
           return AlertDialog(
+            // Scrolls with the keyboard open, so nothing is hidden under it.
+            scrollable: true,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
             title: Text(row == null ? 'Add' : 'Edit'),
             content: SizedBox(
               width: 400,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (final e in controllers.entries)
-                    TextField(
-                      controller: e.value,
-                      autofocus: e.key == 'name',
-                      decoration: InputDecoration(
-                        labelText: e.key.replaceAll('_', ' '),
+                  for (final e in controllers.entries) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: TextField(
+                        controller: e.value,
+                        autofocus: e.key == 'name' && row == null,
+                        textInputAction: TextInputAction.next,
+                        decoration: InputDecoration(
+                          labelText: e.key.replaceAll('_', ' '),
+                        ),
                       ),
                     ),
+                    // Right under the name: in view while typing it.
+                    if (e.key == 'name') active,
+                  ],
                   if (table == Tables.people) ...[
                     const SizedBox(height: 12),
+                    _ChipsLabel('Roles'),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 8,
                       children: [
                         for (final role in personRoles)
                           FilterChip(
-                            label: Text(role),
+                            key: Key('role-$role'),
+                            label: Text(roleLabel(role)),
                             selected: roles.contains(role),
                             onSelected: (on) => setState(() {
                               on ? roles.add(role) : roles.remove(role);
@@ -172,6 +207,7 @@ class _ReferenceList extends StatelessWidget {
                     _ChipsLabel('Used for'),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 8,
                       children: [
                         for (final u in DroneUsage.values)
                           FilterChip(
@@ -227,23 +263,24 @@ class _ReferenceList extends StatelessWidget {
                       ],
                     ),
                   ],
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Active'),
-                    value: values['active'] == 1,
-                    onChanged: (on) =>
-                        setState(() => values['active'] = on ? 1 : 0),
-                  ),
+                  if (row != null &&
+                      table == Tables.people &&
+                      services.isAdmin) ...[
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        key: const Key('person-link'),
+                        onPressed: () => _showPersonKey(context, row),
+                        icon: const Icon(Icons.key),
+                        label: const Text('Personal access key'),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
             actions: [
-              if (row != null && table == Tables.people && services.isAdmin)
-                TextButton(
-                  key: const Key('person-link'),
-                  onPressed: () => _showPersonLink(context, row),
-                  child: const Text('Personal link'),
-                ),
               if (row != null && services.canChange(row))
                 TextButton(
                   key: const Key('delete-reference'),
@@ -321,43 +358,86 @@ Future<bool> _confirmDelete(BuildContext context, DbRow row) async =>
     ) ==
     true;
 
-/// The admin gets a person's own link: with it in Settings, that person can
-/// change and delete the flights and checks they added.
-Future<void> _showPersonLink(BuildContext context, DbRow person) async {
+/// The admin gets a person's own access key: with it in Settings, that
+/// person gets in (only while active in People) and can change and delete
+/// what they added; a viewer only reads. New key turns the old one off.
+Future<void> _showPersonKey(BuildContext context, DbRow person) async {
   final sync = Services.of(context).sync;
-  String text;
-  try {
-    text = await sync.personLink(person['id'] as String);
-    await Clipboard.setData(ClipboardData(text: text));
-  } catch (e) {
-    text = 'Could not make the link: $e';
+  final id = person['id'] as String;
+  Future<String> make({bool renew = false}) async {
+    try {
+      final key = await sync.personKey(id, renew: renew);
+      await Clipboard.setData(ClipboardData(text: key));
+      return key;
+    } catch (e) {
+      return 'Could not make the key: $e';
+    }
   }
+
+  var text = await make();
   if (!context.mounted) return;
   await showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: Text('Link for ${person['name']}'),
-      content: SizedBox(
-        width: 460,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Copied. Send it only to this person: they paste it in '
-              'Settings and can then change and delete their own entries.',
-            ),
-            const SizedBox(height: 12),
-            SelectableText(text, key: const Key('person-link-text')),
-          ],
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        scrollable: true,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        title: Text('Access key for ${person['name']}'),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Copied. Send it only to this person: they paste it in '
+                'Settings > Access key. It works only while the person is '
+                'active here; New key turns this one off.',
+              ),
+              const SizedBox(height: 12),
+              SelectableText(text, key: const Key('person-link-text')),
+            ],
+          ),
         ),
+        actions: [
+          TextButton(
+            key: const Key('person-key-renew'),
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  content: Text(
+                    'Make a new key for ${person['name']}? The old key stops '
+                    'working at once; they need to paste the new one.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('New key'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok != true) return;
+              final key = await make(renew: true);
+              setState(() => text = key);
+            },
+            child: const Text('New key'),
+          ),
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: text)),
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
       ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
     ),
   );
 }

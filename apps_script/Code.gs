@@ -8,9 +8,13 @@
  *   last server_seq it has seen. The script writes the rows (newer
  *   updated_at wins) and answers with every row changed since.
  * - monthlyBackup() copies the spreadsheet to a Drive folder on the 1st.
- * - Links: the admin link can change and delete every row. A person's own
- *   link (the admin makes it in the app, People > person) can change and
- *   delete the rows that person added. The shared pilots' link only adds.
+ * - Access keys: the app is given a short access key, never this script's
+ *   address. The master admin key changes and deletes every row. A person's
+ *   own key (the admin makes it in the app, People > person) works only
+ *   while that person is active in People; it changes and deletes the rows
+ *   that person added, every row when the person has the admin role, and
+ *   nothing at all when the person has the viewer (read only) role. The
+ *   shared pilots' key only adds; disableSharedKey() turns it off.
  *
  * Setup: run setup(), then Deploy > New deployment > Web app (execute as
  * "Me", access "Anyone"), then run connectionLink(). See README.md.
@@ -69,25 +73,61 @@ function setup() {
 }
 
 /**
- * Step 2, after Deploy > New deployment > Web app: prints the links to paste
- * into the app's Settings (web app URL with the access token). Pilots get
- * the first one; only administrators get the admin link.
+ * Step 2, after Deploy > New deployment > Web app: prints the access keys to
+ * paste into the app's Settings > Access key. The master admin key is for
+ * you only; everyone else gets a personal key made in the app (People >
+ * person > Personal key). Returns the shared pilots' key, or the admin key
+ * when the shared key is turned off.
  */
 function connectionLink() {
-  const url = ScriptApp.getService().getUrl();
+  const url = webAppUrl_();
   if (!url) {
     Logger.log('Not deployed yet: Deploy > New deployment > Web app, then run this again.');
     return null;
   }
-  // Run from the editor, getUrl() gives the owner-only /dev URL; the app
-  // needs the deployed /exec one, which has the same id.
-  const base = url.replace(/\/dev$/, '/exec') + '?key=';
-  const link = base + PropertiesService.getScriptProperties().getProperty('API_TOKEN');
-  Logger.log('Link for pilots (Settings > Connection link):');
-  Logger.log(link);
-  Logger.log('Link for administrators only (can change and delete data):');
-  Logger.log(base + adminToken_());
-  return link;
+  const props = PropertiesService.getScriptProperties();
+  const admin = accessKey_(url, adminToken_());
+  Logger.log('Master admin key (only for you, can change and delete everything):');
+  Logger.log(admin);
+  if (props.getProperty('SHARED_KEY_OFF') === '1') {
+    Logger.log('The shared pilots\' key is off: give each person their own key from the app.');
+    return admin;
+  }
+  const shared = accessKey_(url, props.getProperty('API_TOKEN'));
+  Logger.log('Shared pilots\' key (can only add; turn it off with disableSharedKey):');
+  Logger.log(shared);
+  return shared;
+}
+
+/**
+ * Turns the shared pilots' key off, once everyone has a personal key: then
+ * only people listed as active in People (and the master admin key) get in.
+ */
+function disableSharedKey() {
+  PropertiesService.getScriptProperties().setProperty('SHARED_KEY_OFF', '1');
+  Logger.log('Shared pilots\' key is off. enableSharedKey() turns it back on.');
+}
+
+function enableSharedKey() {
+  PropertiesService.getScriptProperties().setProperty('SHARED_KEY_OFF', '0');
+  Logger.log('Shared pilots\' key is on again.');
+}
+
+/** The deployed /exec URL (run from the editor, getUrl() gives /dev). */
+function webAppUrl_() {
+  const url = ScriptApp.getService().getUrl();
+  return url ? url.replace(/\/dev$/, '/exec') : '';
+}
+
+/**
+ * The access key the app is given: "PL1-" and, base64url, the web app id
+ * (or the whole URL when it is not a plain script.google.com one), a space
+ * and the token. Kept equal to accessKey in app/lib/data/sync/sync_service.dart.
+ */
+function accessKey_(url, token) {
+  const m = /^https:\/\/script\.google\.com\/macros\/s\/([^/]+)\/exec$/.exec(url);
+  const payload = (m ? m[1] : url) + ' ' + token;
+  return 'PL1-' + Utilities.base64EncodeWebSafe(payload, Utilities.Charset.UTF_8).replace(/=+$/, '');
 }
 
 /** The admin link's token, made on first use (also for older setups). */
@@ -155,20 +195,24 @@ function readHeader_(sheet) {
 // ------------------------------------------------------------------- http
 
 function doGet() {
-  return json_({ ok: true, app: 'PilotLogbook' });
+  return json_({ ok: true });
 }
 
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
     const user = user_(req.token);
-    if (!user) return json_({ ok: false, error: 'Wrong access token' });
+    if (!user) return json_({ ok: false, error: 'Access key not valid or turned off. Ask the administrator.' });
     if (req.action === 'sync') return json_(sync_(req, user));
     if (req.action === 'personLink') {
-      if (!user.admin) return json_({ ok: false, error: 'Only the admin link can make links' });
-      return json_({ ok: true, token: personToken_(String(req.person_id || '')) });
+      if (!user.admin) return json_({ ok: false, error: 'Only an administrator can make access keys' });
+      const token = personToken_(String(req.person_id || ''), req.renew === true);
+      return json_({ ok: true, token: token, key: accessKey_(webAppUrl_(), token) });
     }
-    if (req.action === 'uploadPhoto') return json_(uploadPhoto_(req));
+    if (req.action === 'uploadPhoto') {
+      if (user.readOnly) return json_({ ok: false, error: 'Read only access' });
+      return json_(uploadPhoto_(req));
+    }
     if (req.action === 'photo') return json_(photo_(String(req.drive_file_id || '')));
     return json_({ ok: false, error: 'Unknown action ' + req.action });
   } catch (err) {
@@ -177,16 +221,38 @@ function doPost(e) {
 }
 
 /**
- * Who a token belongs to: { admin, me } where me is a people id for a
- * person's own link, '' otherwise; null for an unknown token.
+ * Who a token belongs to: { admin, me, readOnly } where me is a people id
+ * for a person's own key, '' otherwise; null for an unknown token, for the
+ * shared key once it is off, and for the key of a person who is deleted or
+ * not active in People. A person's admin and viewer (read only) rights come
+ * from their roles in People, so the admin changes them in the app.
  */
 function user_(token) {
   const props = PropertiesService.getScriptProperties();
-  if (!token) return null;
-  if (token === props.getProperty('ADMIN_TOKEN')) return { admin: true, me: '' };
-  if (token === props.getProperty('API_TOKEN')) return { admin: false, me: '' };
+  if (!token || typeof token !== 'string') return null;
+  if (token === props.getProperty('ADMIN_TOKEN')) return { admin: true, me: '', readOnly: false };
+  if (token === props.getProperty('API_TOKEN')) {
+    return props.getProperty('SHARED_KEY_OFF') === '1' ? null : { admin: false, me: '', readOnly: false };
+  }
   const me = personTokens_()[token];
-  return me ? { admin: false, me: me } : null;
+  if (!me) return null;
+  const person = personRow_(me);
+  if (!person || person.deleted === '1' || person.active === '0') return null;
+  const roles = person.roles.split(',').map(function (r) { return r.trim(); });
+  const readOnly = roles.indexOf('viewer') >= 0;
+  return { admin: !readOnly && roles.indexOf('admin') >= 0, me: me, readOnly: readOnly };
+}
+
+/** A people row as { deleted, active, roles } text, or null. */
+function personRow_(id) {
+  const sheet = ensureSheet_('people', false);
+  if (sheet.getLastRow() < 2) return null;
+  const header = readHeader_(sheet);
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues();
+  const col = function (name) { return header.indexOf(name); };
+  const r = values.filter(function (v) { return text_(v[col('id')]) === id; })[0];
+  if (!r) return null;
+  return { deleted: text_(r[col('deleted')]), active: text_(r[col('active')]), roles: text_(r[col('roles')]) };
 }
 
 /** Personal tokens as token -> people id, in the PERSON_TOKENS property. */
@@ -194,12 +260,16 @@ function personTokens_() {
   return JSON.parse(PropertiesService.getScriptProperties().getProperty('PERSON_TOKENS') || '{}');
 }
 
-/** The token of a person's own link, made on first use. */
-function personToken_(personId) {
+/**
+ * The token of a person's own key, made on first use. [renew] makes a new
+ * one and turns the old one off (a lost phone, a key sent to someone else).
+ */
+function personToken_(personId, renew) {
   if (!personId) throw new Error('No person');
   const tokens = personTokens_();
-  const existing = Object.keys(tokens).filter(function (t) { return tokens[t] === personId; })[0];
-  if (existing) return existing;
+  const existing = Object.keys(tokens).filter(function (t) { return tokens[t] === personId; });
+  if (existing.length && !renew) return existing[0];
+  existing.forEach(function (t) { delete tokens[t]; });
   const token = Utilities.getUuid();
   tokens[token] = personId;
   PropertiesService.getScriptProperties().setProperty('PERSON_TOKENS', JSON.stringify(tokens));
@@ -213,7 +283,8 @@ function json_(obj) {
 // ------------------------------------------------------------------- sync
 
 /**
- * [user] is { admin, me } from user_(). The admin changes anything. Others
+ * [user] is { admin, me, readOnly } from user_(). A read only key changes
+ * nothing: every row it sends is denied. The admin changes anything. Others
  * change and delete only rows whose created_by is their own people id;
  * other edits are listed in `denied` and the row is sent back as it is, so
  * the device drops the edit. Sending the same version again (a retry after
@@ -256,6 +327,11 @@ function sync_(req, user) {
       incoming.forEach(function (row) {
         if (!row.id) return;
         const at = rowById[row.id];
+        if (user.readOnly) {
+          if (at !== undefined) rejected.push(at);
+          denied[table].push(row.id);
+          return;
+        }
         const own = at !== undefined && !!me && text_(values[at][col.created_by]) === me;
         if (!admin && (at !== undefined
           ? text_(values[at][col.updated_at]) !== String(row.updated_at) && !own
@@ -273,7 +349,7 @@ function sync_(req, user) {
           if (name === 'server_seq') return String(seq);
           if (name === 'created_by') {
             if (at !== undefined) return values[at][col.created_by];
-            return admin ? text_(row.created_by) : me;
+            return admin ? text_(row.created_by) || me : me;
           }
           if (name in row) return text_(row[name]);
           return at !== undefined ? values[at][col[name]] : '';
@@ -305,7 +381,7 @@ function sync_(req, user) {
     });
 
     props.setProperty('SEQ', String(seq));
-    return { ok: true, admin: !!admin, me: me, accepted: accepted, denied: denied, pulled: pulled, seq: maxSeq };
+    return { ok: true, admin: !!admin, me: me, readOnly: !!user.readOnly, accepted: accepted, denied: denied, pulled: pulled, seq: maxSeq };
   } finally {
     lock.releaseLock();
   }

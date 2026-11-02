@@ -59,10 +59,12 @@ class _DailyChecksPageState extends State<DailyChecksPage> {
   Widget build(BuildContext context) {
     final logbook = Services.of(context).logbook;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => openDailyCheck(context),
-        icon: const Icon(Icons.checklist),
-        label: const Text('New daily check'),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.extended(
+          onPressed: () => openDailyCheck(context),
+          icon: const Icon(Icons.checklist),
+          label: const Text('New daily check'),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {
