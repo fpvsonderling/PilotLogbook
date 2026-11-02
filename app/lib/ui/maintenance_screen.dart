@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../data/maintenance.dart';
+import '../data/maintenance_guide.dart';
 import '../data/schema.dart';
 import 'services.dart';
 import 'theme.dart';
@@ -434,6 +435,12 @@ class _SectionCard extends StatelessWidget {
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
+                IconButton(
+                  key: Key('guide-${section.column}'),
+                  tooltip: 'How to do it',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => showMaintenanceGuide(context, section),
+                ),
                 FilterChip(
                   key: Key('checked-${section.column}'),
                   label: const Text(checkedValue),
@@ -459,4 +466,106 @@ class _SectionCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shows what to do on [section] and how, with pictures.
+Future<void> showMaintenanceGuide(
+  BuildContext context,
+  MaintenanceSection section,
+) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (context) => DraggableScrollableSheet(
+    expand: false,
+    initialChildSize: 0.75,
+    minChildSize: 0.4,
+    maxChildSize: 0.95,
+    builder: (context, scroll) => _GuideView(section: section, scroll: scroll),
+  ),
+);
+
+class _GuideView extends StatelessWidget {
+  const _GuideView({required this.section, required this.scroll});
+
+  final MaintenanceSection section;
+  final ScrollController scroll;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final guide = maintenanceGuides[section.column];
+    return ListView(
+      controller: scroll,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+      children: [
+        Text(section.title, style: theme.textTheme.titleLarge),
+        const SizedBox(height: 12),
+        if (guide == null || guide.steps.isEmpty)
+          Text(
+            'No instruction for this assembly yet.',
+            style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+          )
+        else ...[
+          if (guide.intro.isNotEmpty) ...[
+            Text(guide.intro),
+            const SizedBox(height: 12),
+          ],
+          for (final (i, step) in guide.steps.indexed) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 28,
+                  child: Text(
+                    '${i + 1}.',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Expanded(child: Text(step.text)),
+              ],
+            ),
+            if (step.image != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(28, 8, 0, 0),
+                child: GestureDetector(
+                  onTap: () => _showImage(context, step.image!),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.asset(step.image!, fit: BoxFit.contain),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 14),
+          ],
+        ],
+      ],
+    );
+  }
+
+  void _showImage(BuildContext context, String asset) => showDialog<void>(
+    context: context,
+    builder: (context) => Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              maxScale: 5,
+              child: Image.asset(asset, fit: BoxFit.contain),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              color: Colors.white,
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

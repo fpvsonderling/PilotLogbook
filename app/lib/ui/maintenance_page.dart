@@ -86,12 +86,22 @@ class _MaintenancePageState extends State<MaintenancePage> {
                       )
                     : Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            for (final d in drones) _DroneCard(drone: d),
-                          ],
+                        child: LayoutBuilder(
+                          builder: (context, box) {
+                            // At least two tiles per row, at most 180 wide.
+                            const gap = 8.0;
+                            final width = ((box.maxWidth - gap) / 2)
+                                .clamp(0.0, 180.0)
+                                .toDouble();
+                            return Wrap(
+                              spacing: gap,
+                              runSpacing: gap,
+                              children: [
+                                for (final d in drones)
+                                  _DroneCard(drone: d, width: width),
+                              ],
+                            );
+                          },
                         ),
                       ),
               ),
@@ -162,37 +172,44 @@ class _MaintenancePageState extends State<MaintenancePage> {
 }
 
 class _DroneCard extends StatelessWidget {
-  const _DroneCard({required this.drone});
+  const _DroneCard({required this.drone, required this.width});
   final DroneMaintenance drone;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final last = drone.last;
-    final muted = TextStyle(color: theme.colorScheme.onSurfaceVariant);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
     return SizedBox(
-      width: 220,
+      width: width,
       child: Card(
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: () => openMaintenance(context, aircraftId: drone.aircraftId),
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Drone ${drone.name}', style: theme.textTheme.titleMedium),
-                const SizedBox(height: 2),
+                Text(
+                  'Drone ${drone.name}',
+                  style: theme.textTheme.titleSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 Text(
                   last == null
                       ? 'No maintenance yet'
                       : 'Last ${_day(last.performedAt)}',
                   style: muted,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
                   '${formatHours(drone.secondsSince)} h',
-                  style: theme.textTheme.headlineSmall?.copyWith(
+                  style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
