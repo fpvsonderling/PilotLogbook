@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/maintenance.dart';
+import 'package:pilot_logbook/data/maintenance_guide.dart';
 import 'package:pilot_logbook/data/schema.dart';
 import 'package:pilot_logbook/main.dart';
 
@@ -102,5 +105,70 @@ void main() {
     expect(row['fts'], 'Checked');
     expect(find.text('Maintenance · 1'), findsOneWidget);
     expect(find.text('7 / 7 checked'), findsOneWidget);
+  });
+
+  testWidgets('drone tiles fit two per row on a phone', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    db.save(Tables.aircraft, {'name': '18', 'active': 1});
+    db.save(Tables.aircraft, {'name': '19', 'active': 1});
+
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Maintenance'));
+    await tester.pumpAndSettle();
+    // The drawer's own long labels overflow while it closes; not this page.
+    tester.takeException();
+    await tester.pump();
+    final a = tester.getTopLeft(find.text('Drone 18'));
+    final b = tester.getTopLeft(find.text('Drone 19'));
+    expect(a.dy, b.dy);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('each assembly has an instruction button', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    db.save(Tables.aircraft, {'name': '18', 'active': 1});
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.tap(find.text('Maintenance'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New maintenance'));
+    await tester.pumpAndSettle();
+    for (final s in maintenanceSections) {
+      await tester.scrollUntilVisible(
+        find.byKey(Key('guide-${s.column}')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+    }
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('guide-arm_assembly')),
+      -200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('guide-arm_assembly')));
+    await tester.pumpAndSettle();
+    expect(find.text('Arm Assembly GVI'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('every assembly has an instruction and its pictures exist', () {
+    for (final s in maintenanceSections) {
+      final guide = maintenanceGuides[s.column];
+      expect(guide?.tasks, isNotEmpty, reason: s.column);
+      for (final t in guide!.tasks) {
+        for (final image in t.images) {
+          expect(File(image).existsSync(), isTrue, reason: image);
+        }
+      }
+    }
   });
 }

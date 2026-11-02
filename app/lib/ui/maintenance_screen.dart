@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../data/maintenance.dart';
+import '../data/maintenance_guide.dart';
 import '../data/schema.dart';
 import 'services.dart';
 import 'theme.dart';
@@ -434,6 +435,12 @@ class _SectionCard extends StatelessWidget {
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
+                IconButton(
+                  key: Key('guide-${section.column}'),
+                  tooltip: 'How to do it',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => showMaintenanceGuide(context, section),
+                ),
                 FilterChip(
                   key: Key('checked-${section.column}'),
                   label: const Text(checkedValue),
@@ -459,4 +466,168 @@ class _SectionCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shows what to do on [section] and how, with pictures.
+Future<void> showMaintenanceGuide(
+  BuildContext context,
+  MaintenanceSection section,
+) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (context) => DraggableScrollableSheet(
+    expand: false,
+    initialChildSize: 0.75,
+    minChildSize: 0.4,
+    maxChildSize: 0.95,
+    builder: (context, scroll) => _GuideView(section: section, scroll: scroll),
+  ),
+);
+
+class _GuideView extends StatelessWidget {
+  const _GuideView({required this.section, required this.scroll});
+
+  final MaintenanceSection section;
+  final ScrollController scroll;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = CheckColors.of(context);
+    final muted = TextStyle(color: theme.colorScheme.onSurfaceVariant);
+    final guide = maintenanceGuides[section.column];
+    return ListView(
+      controller: scroll,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+      children: [
+        Text(section.title, style: theme.textTheme.titleLarge),
+        const SizedBox(height: 12),
+        if (guide == null || guide.tasks.isEmpty)
+          Text('No instruction for this assembly yet.', style: muted)
+        else ...[
+          if (guide.warning.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.tertiaryContainer,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.warning_amber,
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      guide.warning,
+                      style: TextStyle(
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (guide.intro.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(guide.intro),
+          ],
+          for (final task in guide.tasks) ...[
+            const SizedBox(height: 20),
+            Text(task.title, style: theme.textTheme.titleMedium),
+            Text(task.code, style: muted),
+            if (task.when.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.schedule, size: 18, color: colors.ok),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      task.when,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (task.text.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(task.text),
+            ],
+            for (final check in task.checks)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.check_box_outline_blank,
+                      size: 18,
+                      color: colors.ok,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(check)),
+                  ],
+                ),
+              ),
+            if (task.after.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                task.after,
+                style: const TextStyle(fontStyle: FontStyle.italic),
+              ),
+            ],
+            for (final image in task.images)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: GestureDetector(
+                  onTap: () => _showImage(context, image),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: ColoredBox(
+                      color: Colors.white,
+                      child: Image.asset(image, fit: BoxFit.contain),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+          const SizedBox(height: 16),
+          Text('Source: FB3 UAS Maintenance Manual 2.4.8', style: muted),
+        ],
+      ],
+    );
+  }
+
+  void _showImage(BuildContext context, String asset) => showDialog<void>(
+    context: context,
+    builder: (context) => Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              maxScale: 5,
+              child: Image.asset(asset, fit: BoxFit.contain),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              color: Colors.white,
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
