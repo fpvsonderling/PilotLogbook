@@ -53,8 +53,8 @@ class AppsScriptTransport implements SyncTransport {
       decoded = jsonDecode(response.body);
     } on FormatException {
       throw SyncException(
-        'The script did not answer with JSON. Check the web app URL and that '
-        'it is deployed with access "Anyone".',
+        'The server did not answer. Check the access key, or ask the '
+        'administrator.',
       );
     }
     if (decoded is! Map<String, Object?>) {
@@ -91,6 +91,7 @@ class SyncService extends ChangeNotifier {
   static const urlKey = 'script_url';
   static const tokenKey = 'script_token';
   static const adminKey = 'is_admin';
+  static const readOnlyKey = 'read_only';
 
   String? get url => db.setting(urlKey);
 
@@ -105,39 +106,43 @@ class SyncService extends ChangeNotifier {
     return id == null || id.isEmpty ? null : id;
   }
 
-  /// Whether this device may change or delete [row]: the admin any row,
-  /// a person with their own link the rows they added.
-  bool canChange(DbRow row) =>
-      isAdmin || (me != null && row['created_by'] == me);
+  /// True when the key is a viewer's: everything can be read, nothing
+  /// added or changed (the script refuses it too). Known after a sync.
+  bool get readOnly => db.setting(readOnlyKey) == '1';
 
-  /// The admin makes a person's own link, to send to them.
-  Future<String> personLink(String personId) async {
+  /// Whether this device may add new entries.
+  bool get canAdd => !readOnly;
+
+  /// Whether this device may change or delete [row]: the admin any row,
+  /// a person with their own key the rows they added, a viewer none.
+  bool canChange(DbRow row) =>
+      !readOnly && (isAdmin || (me != null && row['created_by'] == me));
+
+  /// The admin makes a person's own access key, to send to them. [renew]
+  /// makes a new one and turns the old one off.
+  Future<String> personKey(String personId, {bool renew = false}) async {
     final answer = await transportFactory(url!)({
       'action': 'personLink',
       'token': token,
       'person_id': personId,
+      'renew': renew,
     });
-    return '$url?key=${answer['token']}';
+    return encodeAccessKey(url!, answer['token'] as String);
   }
 
   String? get token => db.setting(tokenKey);
   bool get configured => (url ?? '').isNotEmpty && (token ?? '').isNotEmpty;
 
-  /// The link connectionLink() prints in Apps Script: the web app URL with
-  /// the access token as ?key=. Saves both; false when the link is not one.
-  bool setConnectionLink(String link) {
-    final uri = Uri.tryParse(link.trim());
-    final key = uri?.queryParameters['key'] ?? '';
-    if (uri == null || !uri.isScheme('https') || key.isEmpty) return false;
-    // The /dev URL only works for the script owner; the deployment is /exec.
-    final url = link
-        .trim()
-        .split('?')
-        .first
-        .replaceFirst(RegExp(r'/dev$'), '/exec');
+  /// Saves an access key (or an old-style connection link, which still
+  /// works); false when the text is neither.
+  bool setAccessKey(String text) {
+    final decoded = decodeAccessKey(text);
+    if (decoded == null) return false;
+    final (url, key) = decoded;
     db.setSetting(urlKey, url);
     if (key != token) {
       db.setSetting(adminKey, null);
+      db.setSetting(readOnlyKey, null);
       db.setSetting(LocalDb.meKey, null);
     }
     db.setSetting(tokenKey, key);
@@ -145,7 +150,8 @@ class SyncService extends ChangeNotifier {
     return true;
   }
 
-  String get connectionLink => configured ? '$url?key=$token' : '';
+  /// The saved access key, to show (hidden) in Settings.
+  String get accessKey => configured ? encodeAccessKey(url!, token!) : '';
 
   /// Builds the transport from settings; replaced in tests.
   SyncTransport Function(String url) transportFactory = AppsScriptTransport.new;
@@ -196,6 +202,7 @@ class SyncService extends ChangeNotifier {
     final denied = (answer['denied'] as Map?) ?? const {};
     db.transaction(() {
       db.setSetting(adminKey, answer['admin'] == true ? '1' : '0');
+      db.setSetting(readOnlyKey, answer['readOnly'] == true ? '1' : '0');
       final me = answer['me'];
       db.setSetting(LocalDb.meKey, me is String && me.isNotEmpty ? me : null);
       for (final t in Tables.all) {
@@ -278,4 +285,47 @@ class SyncService extends ChangeNotifier {
       return null;
     }
   }
+}
+
+const _keyPrefix = 'PL1-';
+const _scriptBase = 'https://script.google.com/macros/s/';
+
+/// The access key people paste in Settings: "PL1-" and, in base64url, the
+/// web app id (or its whole URL when it is not a plain one), a space and the
+/// token. The same as accessKey_ in apps_script/Code.gs.
+String encodeAccessKey(String url, String token) {
+  final m = RegExp(r'^https://script\.google\.com/macros/s/([^/]+)/exec$')
+      .firstMatch(url);
+  final payload = '${m?.group(1) ?? url} $token';
+  return _keyPrefix +
+      base64Url.encode(utf8.encode(payload)).replaceAll('=', '');
+}
+
+/// (web app URL, token) from an access key, or from an old connection link
+/// (https://.../exec?key=...); null when [text] is neither.
+(String, String)? decodeAccessKey(String text) {
+  final t = text.trim();
+  if (t.startsWith(_keyPrefix)) {
+    final String payload;
+    try {
+      payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(t.substring(_keyPrefix.length))),
+      );
+    } on FormatException {
+      return null;
+    }
+    final space = payload.indexOf(' ');
+    if (space <= 0 || space == payload.length - 1) return null;
+    final where = payload.substring(0, space);
+    final token = payload.substring(space + 1);
+    if (where.contains('/')) {
+      return where.startsWith('https://') ? (where, token) : null;
+    }
+    return ('$_scriptBase$where/exec', token);
+  }
+  final uri = Uri.tryParse(t);
+  final key = uri?.queryParameters['key'] ?? '';
+  if (uri == null || !uri.isScheme('https') || key.isEmpty) return null;
+  // The /dev URL only works for the script owner; the deployment is /exec.
+  return (t.split('?').first.replaceFirst(RegExp(r'/dev$'), '/exec'), key);
 }

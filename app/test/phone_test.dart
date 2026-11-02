@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/checklists.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/data/sync/sync_service.dart';
 import 'package:pilot_logbook/main.dart';
 import 'package:pilot_logbook/ui/daily_check_screen.dart';
 
@@ -188,5 +189,59 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('1 aborted', findRichText: true), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('with the keyboard open the Active switch stays in view', (
+    tester,
+  ) async {
+    phone(tester);
+    final db = LocalDb.inMemory();
+    db.setSetting(SyncService.adminKey, '1');
+    final anna = db.save(Tables.people, {
+      'name': 'Anna',
+      'roles': 'pilot',
+      'email': 'anna@example.com',
+      'active': 1,
+    });
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await open(tester, 'Reference data');
+    await tester.tap(find.text('Anna'));
+    await tester.pumpAndSettle();
+
+    // The keyboard takes the lower ~40% of the screen.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 950);
+    await tester.pumpAndSettle();
+    final visibleBottom = (2340 - 950) / 2.75;
+    final active = find.byKey(const Key('reference-active'));
+    expect(tester.getRect(active).bottom, lessThan(visibleBottom));
+    await tester.tap(active);
+    await tester.pumpAndSettle();
+    // Everything else is reached by scrolling, also the viewer role.
+    final viewer = find.byKey(const Key('role-viewer'));
+    await tester.ensureVisible(viewer);
+    await tester.pumpAndSettle();
+    await tester.tap(viewer);
+    await tester.pumpAndSettle();
+    final save = find.text('Save');
+    expect(tester.getRect(save).bottom, lessThan(visibleBottom));
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final row = db.rows(Tables.people).singleWhere((r) => r['id'] == anna);
+    expect(row['active'], 0);
+    expect(row['roles'], 'pilot,viewer');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a viewer sees the logbooks but no add buttons', (tester) async {
+    phone(tester);
+    final db = LocalDb.inMemory();
+    db.setSetting(SyncService.readOnlyKey, '1');
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    expect(find.text('Add'), findsNothing);
+    await open(tester, 'Fault Repair');
+    expect(find.text('Report fault'), findsNothing);
+    await open(tester, 'Settings');
+    expect(find.byKey(const Key('access-level')), findsOneWidget);
+    expect(find.textContaining('read only'), findsOneWidget);
   });
 }

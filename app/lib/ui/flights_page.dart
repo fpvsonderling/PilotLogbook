@@ -79,10 +79,12 @@ class _FlightsPageState extends State<FlightsPage> {
     final kind = widget.kind;
     final title = widget.title;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showFlightForm(context, kind: kind),
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.extended(
+          onPressed: () => showFlightForm(context, kind: kind),
+          icon: const Icon(Icons.add),
+          label: const Text('Add'),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {

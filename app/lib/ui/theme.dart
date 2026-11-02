@@ -109,6 +109,15 @@ class AppTheme {
           textStyle: label.copyWith(fontSize: 16, fontWeight: FontWeight.w700),
         ),
       ),
+      // Dialog buttons (Cancel, Delete, ...) as easy to hit as the others.
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          minimumSize: const Size(64, 48),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          shape: shape12,
+          textStyle: label,
+        ),
+      ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(64, 48),

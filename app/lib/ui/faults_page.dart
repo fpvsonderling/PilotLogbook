@@ -23,10 +23,12 @@ class _FaultsPageState extends State<FaultsPage> {
   Widget build(BuildContext context) {
     final logbook = Services.of(context).logbook;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showFaultForm(context, const FaultReportForm()),
-        icon: const Icon(Icons.report_problem_outlined),
-        label: const Text('Report fault'),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.extended(
+          onPressed: () => showFaultForm(context, const FaultReportForm()),
+          icon: const Icon(Icons.report_problem_outlined),
+          label: const Text('Report fault'),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {

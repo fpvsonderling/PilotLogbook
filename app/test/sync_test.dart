@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/schema.dart';
@@ -5,7 +7,8 @@ import 'package:pilot_logbook/data/sync/sync_service.dart';
 
 /// In-memory stand-in for the spreadsheet script, with the same contract as
 /// apps_script/Code.gs (that file has its own tests). Token 'secret' is the
-/// pilots' link, 'admin-secret' the admin link, 'anna-secret' Anna's own.
+/// pilots' link, 'admin-secret' the admin link, 'anna-secret' Anna's own,
+/// 'viewer-secret' a viewer's (read only).
 class FakeSheets implements SyncTransport {
   final tables = <String, Map<String, Map<String, Object?>>>{};
   var seq = 0;
@@ -15,7 +18,12 @@ class FakeSheets implements SyncTransport {
   Future<Map<String, Object?>> call(Map<String, Object?> body) async {
     calls++;
     final admin = body['token'] == 'admin-secret';
-    final me = body['token'] == 'anna-secret' ? 'p-anna' : '';
+    final viewer = body['token'] == 'viewer-secret';
+    final me = body['token'] == 'anna-secret'
+        ? 'p-anna'
+        : viewer
+        ? 'p-vera'
+        : '';
     if (!admin && me.isEmpty && body['token'] != 'secret') {
       throw SyncException('Wrong access token');
     }
@@ -35,6 +43,11 @@ class FakeSheets implements SyncTransport {
         final existing = rows[id];
         final own =
             existing != null && me.isNotEmpty && existing['created_by'] == me;
+        if (viewer) {
+          if (existing != null) rejected.add(id);
+          no.add(id);
+          continue;
+        }
         if (!admin &&
             (existing != null
                 ? existing['updated_at'] != r['updated_at'] && !own
@@ -81,6 +94,7 @@ class FakeSheets implements SyncTransport {
       'ok': true,
       'admin': admin,
       'me': me,
+      'readOnly': viewer,
       'accepted': accepted,
       'denied': denied,
       'pulled': pulled,
@@ -208,25 +222,68 @@ void main() {
     expect(a.pendingCount, 1);
   });
 
-  test('the connection link sets the URL and the token', () {
+  test('the access key sets the URL and the token, and hides the URL', () {
     final a = SyncService(LocalDb.inMemory());
-    expect(a.setConnectionLink('hello'), isFalse);
+    expect(a.setAccessKey('hello'), isFalse);
+    expect(a.setAccessKey('PL1-%%%'), isFalse);
     expect(
-      a.setConnectionLink('https://script.google.com/macros/s/abc/exec'),
+      a.setAccessKey('PL1-${base64Url.encode(utf8.encode('x'))}'),
+      isFalse,
+    );
+    // Made by connectionLink in Apps Script: 'abc t-1' in base64url.
+    final key =
+        'PL1-${base64Url.encode(utf8.encode('abc t-1')).replaceAll('=', '')}';
+    expect(a.setAccessKey(' $key '), isTrue);
+    expect(a.url, 'https://script.google.com/macros/s/abc/exec');
+    expect(a.token, 't-1');
+    expect(a.accessKey, key);
+    expect(a.accessKey, isNot(contains('script')));
+  });
+
+  test('an unusual web app URL travels whole in the key', () {
+    const url = 'https://script.google.com/a/macros/firm.pl/s/abc/exec';
+    final key = encodeAccessKey(url, 't-2');
+    expect(decodeAccessKey(key), (url, 't-2'));
+  });
+
+  test('an old connection link still works and becomes a key', () {
+    final a = SyncService(LocalDb.inMemory());
+    expect(
+      a.setAccessKey('https://script.google.com/macros/s/abc/exec'),
       isFalse,
     );
     expect(
-      a.setConnectionLink(
-        ' https://script.google.com/macros/s/abc/exec?key=t-1 ',
-      ),
+      a.setAccessKey(' https://script.google.com/macros/s/abc/dev?key=t-1 '),
       isTrue,
     );
     expect(a.url, 'https://script.google.com/macros/s/abc/exec');
     expect(a.token, 't-1');
-    expect(
-      a.connectionLink,
-      'https://script.google.com/macros/s/abc/exec?key=t-1',
-    );
+    expect(decodeAccessKey(a.accessKey), (a.url, 't-1'));
+  });
+
+  test('a viewer reads everything, and what it changes is dropped', () async {
+    final sheets = FakeSheets();
+    final admin = device(sheets, admin: true);
+    final id = admin.db.save(Tables.flights, {'notes': 'real'});
+    await admin.sync();
+
+    final viewer = device(sheets, token: 'viewer-secret');
+    expect(viewer.canAdd, isTrue); // Not known before the first sync.
+    await viewer.sync();
+    expect(viewer.readOnly, isTrue);
+    expect(viewer.canAdd, isFalse);
+    final row = viewer.db.rows(Tables.flights).single;
+    expect(row['notes'], 'real');
+    expect(viewer.canChange(row), isFalse);
+
+    viewer.db.save(Tables.flights, {'id': id, 'notes': 'changed'});
+    viewer.db.save(Tables.flights, {'notes': 'new'});
+    await viewer.sync();
+    expect(viewer.lastError, isNull);
+    expect(viewer.pendingCount, 0);
+    expect(sheets.tables['flights']!.length, 1);
+    expect(sheets.tables['flights']![id]!['notes'], 'real');
+    expect(viewer.db.rows(Tables.flights).single['notes'], 'real');
   });
 
   test('without settings sync does nothing', () async {

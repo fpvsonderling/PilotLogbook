@@ -27,6 +27,9 @@ class Services extends InheritedWidget {
   bool get isAdmin => sync.isAdmin;
   bool canChange(DbRow row) => sync.canChange(row);
 
+  /// False for a viewer (read only key): add buttons are hidden.
+  bool get canAdd => sync.canAdd;
+
   @override
   bool updateShouldNotify(Services oldWidget) =>
       db != oldWidget.db || sync != oldWidget.sync;
@@ -46,4 +49,20 @@ class DbBuilder extends StatelessWidget {
     ]),
     builder: (context, _) => builder(context),
   );
+}
+
+/// An add button that disappears for a viewer (read only key), also when
+/// the role becomes known during a sync.
+class AddButton extends StatelessWidget {
+  const AddButton({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final sync = Services.of(context).sync;
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) => sync.canAdd ? child : const SizedBox.shrink(),
+    );
+  }
 }
