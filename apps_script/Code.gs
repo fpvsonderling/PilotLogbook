@@ -39,6 +39,7 @@ const SCHEMA = {
   fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
   fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
   maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
+  maintenance_intervals: ['model', 'section', 'hours', 'flights', 'days'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version'],
 };
@@ -49,7 +50,7 @@ const BACKUP_FOLDER = 'PilotLogbook Backups';
 const PHOTO_FOLDER = 'PilotLogbook Photos';
 const DOCUMENT_FOLDER = 'PilotLogbook Documents';
 // Tables only the admin link may add to, change or delete.
-const ADMIN_ONLY_TABLES = ['documents'];
+const ADMIN_ONLY_TABLES = ['documents', 'maintenance_intervals'];
 // Documents go to the app in pieces of this many bytes, so big manuals fit
 // in one answer each.
 const DOCUMENT_PART = 8 * 1024 * 1024;

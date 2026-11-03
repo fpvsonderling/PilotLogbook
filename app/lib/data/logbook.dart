@@ -157,7 +157,11 @@ class FlightStat {
 /// One person's flights split by role: as remote pilot (RP), as pilot
 /// assistant (PA) and as spotter.
 class PersonRoles {
-  const PersonRoles({required this.rp, required this.pa, required this.spotter});
+  const PersonRoles({
+    required this.rp,
+    required this.pa,
+    required this.spotter,
+  });
   final FlightStat rp;
   final FlightStat pa;
   final FlightStat spotter;
@@ -375,22 +379,30 @@ class Logbook {
   /// as RP is never mixed with being PA or spotter.
   PersonRoles personRoles(String personId, [TableFilter? filter]) {
     final (scope, args) = statsScope(filter);
-    final r = db
-        .select(
-          'SELECT '
-          'COALESCE(SUM(f.rp_id = ?), 0) AS rp, '
-          'COALESCE(SUM(CASE WHEN f.rp_id = ? THEN f.duration_s END), 0) AS rs, '
-          'COALESCE(SUM(f.pa_id = ?), 0) AS pa, '
-          'COALESCE(SUM(CASE WHEN f.pa_id = ? THEN f.duration_s END), 0) AS ps, '
-          'COALESCE(SUM(f.spotter_id = ?), 0) AS sp, '
-          'COALESCE(SUM(CASE WHEN f.spotter_id = ? THEN f.duration_s END), 0) AS ss '
-          'FROM flights f WHERE f.deleted = 0$scope',
-          [for (var i = 0; i < 6; i++) personId, ...args],
-        )
-        .single;
+    final r = db.select(
+      'SELECT '
+      'COALESCE(SUM(f.rp_id = ?), 0) AS rp, '
+      'COALESCE(SUM(CASE WHEN f.rp_id = ? THEN f.duration_s END), 0) AS rs, '
+      'COALESCE(SUM(f.pa_id = ?), 0) AS pa, '
+      'COALESCE(SUM(CASE WHEN f.pa_id = ? THEN f.duration_s END), 0) AS ps, '
+      'COALESCE(SUM(f.spotter_id = ?), 0) AS sp, '
+      'COALESCE(SUM(CASE WHEN f.spotter_id = ? THEN f.duration_s END), 0) AS ss '
+      'FROM flights f WHERE f.deleted = 0$scope',
+      [for (var i = 0; i < 6; i++) personId, ...args],
+    ).single;
     return PersonRoles(
-      rp: FlightStat('rp', 'RP', flights: r['rp'] as int, seconds: r['rs'] as int),
-      pa: FlightStat('pa', 'PA', flights: r['pa'] as int, seconds: r['ps'] as int),
+      rp: FlightStat(
+        'rp',
+        'RP',
+        flights: r['rp'] as int,
+        seconds: r['rs'] as int,
+      ),
+      pa: FlightStat(
+        'pa',
+        'PA',
+        flights: r['pa'] as int,
+        seconds: r['ps'] as int,
+      ),
       spotter: FlightStat(
         'spotter',
         'Spotter',

@@ -46,11 +46,7 @@ class _StatsPageState extends State<StatsPage> {
         );
         final sections = [
           StatsSection('Projects', logbook.projectStats(f), total: true),
-          StatsSection(
-            'Remote pilot (RP)',
-            logbook.pilotStats(f),
-            total: true,
-          ),
+          StatsSection('Remote pilot (RP)', logbook.pilotStats(f), total: true),
           StatsSection(
             'Pilot assistant (PA)',
             logbook.paStats(f),

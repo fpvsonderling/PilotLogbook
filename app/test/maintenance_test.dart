@@ -27,7 +27,7 @@ void main() {
 
   test('flying since the last maintenance, per drone', () {
     final db = LocalDb.inMemory();
-    final log = MaintenanceLog(db);
+    final log = MaintenanceLog(db, today: () => DateTime(2026, 9, 2));
     final d18 = db.save(Tables.aircraft, {'name': '18', 'active': 1});
     final d24 = db.save(Tables.aircraft, {'name': '24', 'active': 1});
     db.save(Tables.maintenance, {
@@ -170,5 +170,104 @@ void main() {
         }
       }
     }
+  });
+
+  test('assemblies are due by hours, flights or days', () {
+    final db = LocalDb.inMemory();
+    final log = MaintenanceLog(db, today: () => DateTime(2026, 11, 3));
+    final d18 = db.save(Tables.aircraft, {
+      'name': '18',
+      'model': 'FB3',
+      'active': 1,
+    });
+    db.save(Tables.maintenance, {
+      'performed_at': '2026-10-01 08:00:00',
+      'aircraft_id': d18,
+      for (final s in maintenanceSections) s.column: 'Checked',
+    });
+    // 8:30 h flown since: propellers (10 h) are at 85 %, due soon.
+    for (var i = 0; i < 17; i++) {
+      db.save(Tables.flights, {
+        'date': '2026-10-${(10 + i).toString().padLeft(2, '0')}',
+        'aircraft_id': d18,
+        'takeoff_at': '10:00:00',
+        'duration_s': 1800,
+      });
+    }
+    var d = log.drones().single;
+    SectionDue of(String column) =>
+        d.sections.firstWhere((s) => s.section.column == column);
+    expect(of('propulsion_system').level, DueLevel.soon);
+    expect(of('arm_assembly').level, DueLevel.ok); // 8.5 of 20 h
+    expect(of('fts').level, DueLevel.ok); // 33 of 182 days
+    expect(d.level, DueLevel.soon);
+    expect(log.dueCount(), 1);
+
+    // The admin: every 30 flights for all drones, FTS every 30 days for FB3.
+    db.save(Tables.maintenanceIntervals, {
+      'section': 'arm_assembly',
+      'flights': 15,
+    });
+    db.save(Tables.maintenanceIntervals, {
+      'model': 'fb3',
+      'section': 'fts',
+      'days': 30,
+    });
+    // An empty row turns the reminder off.
+    db.save(Tables.maintenanceIntervals, {
+      'model': 'FB3',
+      'section': 'propulsion_system',
+    });
+    d = log.drones().single;
+    expect(of('arm_assembly').level, DueLevel.overdue);
+    expect(of('arm_assembly').describe(), '2 flights over');
+    expect(of('fts').level, DueLevel.overdue);
+    expect(of('propulsion_system').interval.isOff, isTrue);
+    expect(of('propulsion_system').level, DueLevel.ok);
+    expect(of('power_system').interval.hours, 10); // still the book's
+
+    // A drone never maintained counts all its flying, not days.
+    final d19 = db.save(Tables.aircraft, {'name': '19', 'active': 1});
+    db.save(Tables.flights, {
+      'date': '2026-01-01',
+      'aircraft_id': d19,
+      'takeoff_at': '10:00:00',
+      'duration_s': 11 * 3600,
+    });
+    final d19m = log.drones().firstWhere((x) => x.aircraftId == d19);
+    expect(
+      d19m.due.map((s) => s.section.column),
+      ['propulsion_system', 'load_assembly', 'power_system'],
+    );
+    expect(d19m.level, DueLevel.overdue);
+  });
+
+  testWidgets('a drone due shows on its tile and at the top', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final db = LocalDb.inMemory();
+    final drone = db.save(Tables.aircraft, {'name': '18', 'active': 1});
+    db.save(Tables.aircraft, {'name': '19', 'active': 1});
+    db.save(Tables.flights, {
+      'date': '2026-01-01',
+      'aircraft_id': drone,
+      'takeoff_at': '10:00:00',
+      'duration_s': 12 * 3600,
+    });
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('alert-maintenance')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('alert-maintenance')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Due: Propulsion System, Load Assembly, Power System'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Drone 18'));
+    await tester.pumpAndSettle();
+    expect(find.text('2:00 h over'), findsNWidgets(3));
+    expect(tester.takeException(), isNull);
   });
 }

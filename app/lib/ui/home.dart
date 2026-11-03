@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/maintenance.dart';
 import 'daily_checks_page.dart';
 import 'documents_page.dart';
 import 'faults_page.dart';
@@ -55,7 +56,11 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(narrow ? _pages[_index].$2 : 'Pilot Logbook'),
-        actions: const [SyncButton(), SizedBox(width: 8)],
+        actions: [
+          _AlertCounts(onOpen: (i) => setState(() => _index = i)),
+          const SyncButton(),
+          const SizedBox(width: 8),
+        ],
       ),
       drawer: narrow
           ? NavigationDrawer(
@@ -109,6 +114,76 @@ class _HomePageState extends State<HomePage> {
             ),
     );
   }
+}
+
+/// Counts at the top of the app that need someone: drones due for
+/// maintenance. Tapping one opens its page ([onOpen] gets the page index).
+class _AlertCounts extends StatelessWidget {
+  const _AlertCounts({required this.onOpen});
+  final ValueChanged<int> onOpen;
+
+  @override
+  Widget build(BuildContext context) => DbBuilder(
+    builder: (context) {
+      final services = Services.of(context);
+      final drones = MaintenanceLog(services.db).dueCount();
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (drones > 0)
+            _AlertCount(
+              key: const Key('alert-maintenance'),
+              icon: Icons.engineering,
+              count: drones,
+              tooltip: drones == 1
+                  ? '1 drone due for maintenance'
+                  : '$drones drones due for maintenance',
+              onTap: () => onOpen(4),
+            ),
+        ],
+      );
+    },
+  );
+}
+
+class _AlertCount extends StatelessWidget {
+  const _AlertCount({
+    super.key,
+    required this.icon,
+    required this.count,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final int count;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: TextButton.icon(
+      style: TextButton.styleFrom(foregroundColor: Colors.white),
+      onPressed: onTap,
+      icon: Icon(icon),
+      label: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+        decoration: BoxDecoration(
+          color: AppPalette.gold,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          '$count',
+          style: const TextStyle(
+            color: AppPalette.text,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// Shows sync state and how many local changes wait for upload.

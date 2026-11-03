@@ -218,6 +218,18 @@ class Tables {
     Col('notes'),
   ]);
 
+  // How often each maintenance assembly is due, whichever comes first.
+  // Rows override the maintenance book's intervals (maintenance.dart):
+  // model empty = every drone, else drones whose model is this one. A row
+  // with all three empty turns the reminder off. Only the admin changes it.
+  static const maintenanceIntervals = TableDef('maintenance_intervals', [
+    Col('model'),
+    Col('section'), // maintenance column, e.g. arm_assembly
+    Col('hours', ColType.real),
+    Col('flights', ColType.integer),
+    Col('days', ColType.integer),
+  ]);
+
   static const torqueSpecs = TableDef('torque_specs', [
     Col('model'),
     Col('component'),
@@ -258,6 +270,7 @@ class Tables {
     faultSignoffs,
     faultPhotos,
     maintenance,
+    maintenanceIntervals,
     torqueSpecs,
     documents,
   ];
