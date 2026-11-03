@@ -23,7 +23,7 @@
 // SCHEMA-START (kept equal to app/lib/data/schema.dart by a test)
 const SCHEMA = {
   people: ['name', 'roles', 'email', 'active'],
-  projects: ['name', 'active'],
+  projects: ['name', 'active', 'client', 'country', 'coordinates', 'maps_url', 'zone_map_url', 'notes'],
   aircraft: ['name', 'model', 'serial', 'active', 'usage'],
   batteries: ['name', 'set_name', 'serial', 'active', 'aircraft_ids'],
   mission_types: ['name', 'active'],
@@ -39,7 +39,9 @@ const SCHEMA = {
   fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
   fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
   maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
+  maintenance_intervals: ['model', 'section', 'hours', 'flights', 'days'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
+  competencies: ['person_id', 'type', 'number', 'issued_on', 'expires_on', 'url', 'notes', 'verified', 'verified_by'],
   documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version'],
 };
 // SCHEMA-END
@@ -49,7 +51,11 @@ const BACKUP_FOLDER = 'PilotLogbook Backups';
 const PHOTO_FOLDER = 'PilotLogbook Photos';
 const DOCUMENT_FOLDER = 'PilotLogbook Documents';
 // Tables only the admin link may add to, change or delete.
-const ADMIN_ONLY_TABLES = ['documents'];
+const ADMIN_ONLY_TABLES = ['documents', 'maintenance_intervals', 'projects'];
+// Tables of one person's own rows (column person_id): only that person
+// (with their own key) and the admin get them, add, change and delete them;
+// only the admin sets verified.
+const PERSONAL_TABLES = ['competencies'];
 // Documents go to the app in pieces of this many bytes, so big manuals fit
 // in one answer each.
 const DOCUMENT_PART = 8 * 1024 * 1024;
@@ -303,7 +309,9 @@ function json_(obj) {
 /**
  * [user] is { admin, me, readOnly } from user_(). A read only key changes
  * nothing: every row it sends is denied. Only the admin changes the tables
- * in ADMIN_ONLY_TABLES (documents). The admin changes anything. Others
+ * in ADMIN_ONLY_TABLES (documents, projects, intervals). In PERSONAL_TABLES (competencies) a
+ * person gets, adds and changes only the rows of their own person_id, and
+ * their change clears verified. The admin changes anything. Others
  * change and delete only rows whose created_by is their own people id;
  * other edits are listed in `denied` and the row is sent back as it is, so
  * the device drops the edit. Sending the same version again (a retry after
@@ -351,7 +359,14 @@ function sync_(req, user) {
           denied[table].push(row.id);
           return;
         }
-        const own = at !== undefined && !!me && text_(values[at][col.created_by]) === me;
+        const personal = PERSONAL_TABLES.indexOf(table) >= 0;
+        if (personal && !admin && !(me && text_(row.person_id) === me &&
+          (at === undefined || text_(values[at][col.person_id]) === me))) {
+          if (at !== undefined) rejected.push(at);
+          denied[table].push(row.id);
+          return;
+        }
+        const own = at !== undefined && !!me && (personal || text_(values[at][col.created_by]) === me);
         if (!admin && (at !== undefined
           ? text_(values[at][col.updated_at]) !== String(row.updated_at) && !own
           : String(row.deleted) === '1')) {
@@ -370,6 +385,8 @@ function sync_(req, user) {
             if (at !== undefined) return values[at][col.created_by];
             return admin ? text_(row.created_by) || me : me;
           }
+          // A person's own change is checked again by the admin.
+          if (personal && !admin && (name === 'verified' || name === 'verified_by')) return '';
           if (name in row) return text_(row[name]);
           return at !== undefined ? values[at][col[name]] : '';
         });
@@ -393,6 +410,7 @@ function sync_(req, user) {
       values.forEach(function (r, i) {
         const s = Number(r[col.server_seq] || 0);
         if (s > max) max = s;
+        if (PERSONAL_TABLES.indexOf(table) >= 0 && !admin && !(me && text_(r[col.person_id]) === me)) return;
         if (s > from || rejected.indexOf(i) >= 0) rows.push(toObject_(header, r));
       });
       pulled[table] = rows;

@@ -45,9 +45,19 @@ class Tables {
     Col('active', ColType.integer),
   ]);
 
+  // Projects (wind farms). Only the admin adds and changes them.
   static const projects = TableDef('projects', [
     Col('name'),
     Col('active', ColType.integer),
+    Col('client'),
+    Col('country'),
+    // One point per line, "lat, lon" or "T01: lat, lon" (see projects.dart).
+    Col('coordinates'),
+    // Own Google Maps link; empty: made from the first point.
+    Col('maps_url'),
+    // The country's drone zone map, pasted by the admin.
+    Col('zone_map_url'),
+    Col('notes'),
   ]);
 
   static const aircraft = TableDef('aircraft', [
@@ -218,11 +228,39 @@ class Tables {
     Col('notes'),
   ]);
 
+  // How often each maintenance assembly is due, whichever comes first.
+  // Rows override the maintenance book's intervals (maintenance.dart):
+  // model empty = every drone, else drones whose model is this one. A row
+  // with all three empty turns the reminder off. Only the admin changes it.
+  static const maintenanceIntervals = TableDef('maintenance_intervals', [
+    Col('model'),
+    Col('section'), // maintenance column, e.g. arm_assembly
+    Col('hours', ColType.real),
+    Col('flights', ColType.integer),
+    Col('days', ColType.integer),
+  ]);
+
   static const torqueSpecs = TableDef('torque_specs', [
     Col('model'),
     Col('component'),
     Col('value_nm', ColType.real),
     Col('notes'),
+  ]);
+
+  // A person's licences, trainings, medicals and insurance. Only that
+  // person (own key) and the admin get, add and change them; only the admin
+  // marks one verified, and the person's own change clears it again. No
+  // scans in the app: url is a link to the document in Google Drive.
+  static const competencies = TableDef('competencies', [
+    Col('person_id'),
+    Col('type'), // e.g. GWO, Medical, see competencyTypes
+    Col('number'),
+    Col('issued_on'), // yyyy-MM-dd
+    Col('expires_on'), // yyyy-MM-dd, empty = does not expire
+    Col('url'),
+    Col('notes'),
+    Col('verified', ColType.integer), // 1 = the admin checked the document
+    Col('verified_by'), // people id, empty for the master admin key
   ]);
 
   // Documents every pilot needs. Only the admin link adds, changes and
@@ -258,9 +296,15 @@ class Tables {
     faultSignoffs,
     faultPhotos,
     maintenance,
+    maintenanceIntervals,
     torqueSpecs,
+    competencies,
     documents,
   ];
+
+  /// Tables of one person's own rows (person_id): the script gives each
+  /// person only theirs, the admin everyone's. See PERSONAL_TABLES in Code.gs.
+  static const personal = [competencies];
 
   static TableDef byName(String name) => all.firstWhere((t) => t.name == name);
 }

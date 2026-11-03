@@ -4,16 +4,17 @@ import 'package:flutter/services.dart';
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/schema.dart';
+import 'intervals_tab.dart';
 import 'services.dart';
 
-/// People, projects, drones, batteries and mission types: the lists every
-/// form picks from, instead of names typed by hand.
+/// People, drones, batteries and mission types: the lists every form
+/// picks from, instead of names typed by hand (projects have their own
+/// page), and the maintenance intervals.
 class ReferencePage extends StatelessWidget {
   const ReferencePage({super.key});
 
   static const _tabs = [
     ('People', Tables.people),
-    ('Projects', Tables.projects),
     ('Drones', Tables.aircraft),
     ('Batteries', Tables.batteries),
     ('Mission types', Tables.missionTypes),
@@ -21,17 +22,23 @@ class ReferencePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-    length: _tabs.length,
+    length: _tabs.length + 1,
     child: Column(
       children: [
         TabBar(
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          tabs: [for (final t in _tabs) Tab(text: t.$1)],
+          tabs: [
+            for (final t in _tabs) Tab(text: t.$1),
+            const Tab(text: 'Maintenance intervals'),
+          ],
         ),
         Expanded(
           child: TabBarView(
-            children: [for (final t in _tabs) _ReferenceList(table: t.$2)],
+            children: [
+              for (final t in _tabs) _ReferenceList(table: t.$2),
+              const IntervalsTab(),
+            ],
           ),
         ),
       ],

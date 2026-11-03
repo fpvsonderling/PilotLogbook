@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../data/maintenance.dart';
+import '../data/competencies.dart';
+import 'competencies_page.dart';
 import 'daily_checks_page.dart';
 import 'documents_page.dart';
 import 'faults_page.dart';
 import 'flights_page.dart';
 import 'maintenance_page.dart';
 import 'nm_page.dart';
+import 'projects_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
 import 'settings_page.dart';
@@ -22,31 +26,33 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _index = 0;
 
-  static const _pages = [
-    (Icons.flight_takeoff, 'Cargo LogBook'),
-    (Icons.search, 'Inspection LogBook'),
-    (Icons.checklist, 'Daily checks'),
-    (Icons.handyman, 'Fault Repair'),
-    (Icons.engineering, 'Maintenance'),
-    (Icons.bar_chart, 'Statistic'),
-    (Icons.list_alt, 'Reference data'),
-    (Icons.build, 'Nm'),
-    (Icons.description, 'Documents'),
-    (Icons.settings, 'Settings'),
+  static final _pages = <(IconData, String, Widget Function())>[
+    (
+      Icons.flight_takeoff,
+      'Cargo LogBook',
+      () => const FlightsPage(kind: 'cargo', title: 'Cargo LogBook'),
+    ),
+    (
+      Icons.search,
+      'Inspection LogBook',
+      () => const FlightsPage(kind: 'inspection', title: 'Inspection LogBook'),
+    ),
+    (Icons.checklist, 'Daily checks', () => const DailyChecksPage()),
+    (Icons.handyman, 'Fault Repair', () => const FaultsPage()),
+    (Icons.engineering, 'Maintenance', () => const MaintenancePage()),
+    (Icons.location_on, 'Projects', () => const ProjectsPage()),
+    (Icons.verified_user, 'Competencies', () => const CompetenciesPage()),
+    (Icons.bar_chart, 'Statistic', () => const StatsPage()),
+    (Icons.list_alt, 'Reference data', () => const ReferencePage()),
+    (Icons.build, 'Nm', () => const NmPage()),
+    (Icons.description, 'Documents', () => const DocumentsPage()),
+    (Icons.settings, 'Settings', () => const SettingsPage()),
   ];
 
-  Widget _page() => switch (_index) {
-    0 => const FlightsPage(kind: 'cargo', title: 'Cargo LogBook'),
-    1 => const FlightsPage(kind: 'inspection', title: 'Inspection LogBook'),
-    2 => const DailyChecksPage(),
-    3 => const FaultsPage(),
-    4 => const MaintenancePage(),
-    5 => const StatsPage(),
-    6 => const ReferencePage(),
-    7 => const NmPage(),
-    8 => const DocumentsPage(),
-    _ => const SettingsPage(),
-  };
+  /// Index of the page called [label].
+  static int pageIndex(String label) => _pages.indexWhere((p) => p.$2 == label);
+
+  Widget _page() => _pages[_index].$3();
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +61,13 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(narrow ? _pages[_index].$2 : 'Pilot Logbook'),
-        actions: const [SyncButton(), SizedBox(width: 8)],
+        actions: [
+          _AlertCounts(
+            onOpen: (label) => setState(() => _index = pageIndex(label)),
+          ),
+          const SyncButton(),
+          const SizedBox(width: 8),
+        ],
       ),
       drawer: narrow
           ? NavigationDrawer(
@@ -66,7 +78,7 @@ class _HomePageState extends State<HomePage> {
               },
               children: [
                 const SizedBox(height: 16),
-                for (final (icon, label) in _pages)
+                for (final (icon, label, _) in _pages)
                   NavigationDrawerDestination(
                     icon: Icon(icon),
                     label: Text(label),
@@ -92,7 +104,7 @@ class _HomePageState extends State<HomePage> {
                               setState(() => _index = i),
                           labelType: NavigationRailLabelType.all,
                           destinations: [
-                            for (final (icon, label) in _pages)
+                            for (final (icon, label, _) in _pages)
                               NavigationRailDestination(
                                 icon: Icon(icon),
                                 label: Text(label),
@@ -109,6 +121,81 @@ class _HomePageState extends State<HomePage> {
             ),
     );
   }
+}
+
+/// Counts at the top of the app that need someone: drones due for
+/// maintenance, competencies expired or running out. Tapping one opens its
+/// page ([onOpen] gets the page's label).
+class _AlertCounts extends StatelessWidget {
+  const _AlertCounts({required this.onOpen});
+  final ValueChanged<String> onOpen;
+
+  @override
+  Widget build(BuildContext context) => DbBuilder(
+    builder: (context) {
+      final services = Services.of(context);
+      final drones = MaintenanceLog(services.db).dueCount();
+      final competencies = CompetencyLog(services.db).alerts().length;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (drones > 0)
+            _AlertCount(
+              key: const Key('alert-maintenance'),
+              icon: Icons.engineering,
+              count: drones,
+              tooltip: drones == 1
+                  ? '1 drone due for maintenance'
+                  : '$drones drones due for maintenance',
+              onTap: () => onOpen('Maintenance'),
+            ),
+          if (competencies > 0)
+            _AlertCount(
+              key: const Key('alert-competencies'),
+              icon: Icons.verified_user,
+              count: competencies,
+              tooltip: competencies == 1
+                  ? '1 competency expired or running out'
+                  : '$competencies competencies expired or running out',
+              onTap: () => onOpen('Competencies'),
+            ),
+        ],
+      );
+    },
+  );
+}
+
+class _AlertCount extends StatelessWidget {
+  const _AlertCount({
+    super.key,
+    required this.icon,
+    required this.count,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final int count;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip,
+    color: Colors.white,
+    onPressed: onTap,
+    // A small gold count on the icon, so the page title still fits on a
+    // phone.
+    icon: Badge(
+      backgroundColor: AppPalette.gold,
+      textColor: AppPalette.text,
+      label: Text(
+        '$count',
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      child: Icon(icon),
+    ),
+  );
 }
 
 /// Shows sync state and how many local changes wait for upload.

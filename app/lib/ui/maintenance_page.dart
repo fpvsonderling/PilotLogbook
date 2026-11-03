@@ -4,6 +4,7 @@ import '../data/maintenance.dart';
 import '../data/schema.dart';
 import '../data/table_filter.dart';
 import 'maintenance_screen.dart';
+import 'due_colors.dart';
 import 'services.dart';
 import 'table_tools.dart';
 import 'theme.dart';
@@ -173,6 +174,12 @@ class _MaintenancePageState extends State<MaintenancePage> {
   }
 }
 
+Urgency urgencyOf(DueLevel l) => switch (l) {
+  DueLevel.ok => Urgency.ok,
+  DueLevel.soon => Urgency.soon,
+  DueLevel.overdue => Urgency.over,
+};
+
 class _DroneCard extends StatelessWidget {
   const _DroneCard({required this.drone, required this.width});
   final DroneMaintenance drone;
@@ -185,12 +192,23 @@ class _DroneCard extends StatelessWidget {
     final muted = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
+    final urgency = urgencyOf(drone.level);
+    final (fg, bg) = urgencyColors(context, urgency);
+    final due = drone.due;
     return SizedBox(
       width: width,
       child: Card(
+        key: Key('drone-card-${drone.name}'),
+        color: bg,
+        shape: fg == null
+            ? null
+            : RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: fg, width: 1.5),
+              ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () => openMaintenance(context, aircraftId: drone.aircraftId),
+          onTap: () => _showDue(context, drone),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
             child: Column(
@@ -221,6 +239,20 @@ class _DroneCard extends StatelessWidget {
                   '${last == null ? ' in total' : ' since'}',
                   style: muted,
                 ),
+                if (due.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    due.first.level == DueLevel.overdue
+                        ? 'Due: ${due.map((d) => d.section.title).join(', ')}'
+                        : 'Soon: ${due.map((d) => d.section.title).join(', ')}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: fg,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ],
             ),
           ),
@@ -229,6 +261,91 @@ class _DroneCard extends StatelessWidget {
     );
   }
 }
+
+/// Each assembly of a drone against its interval, and a button to start
+/// the maintenance.
+Future<void> _showDue(BuildContext context, DroneMaintenance drone) =>
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        final canAdd = Services.of(context).canAdd;
+        return AlertDialog(
+          scrollable: true,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 24,
+          ),
+          title: Text('Drone ${drone.name}'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final s in drone.sections)
+                  Padding(
+                    key: Key('due-${s.section.column}'),
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                s.section.title,
+                                style: theme.textTheme.titleSmall,
+                              ),
+                              Text(
+                                [
+                                  s.lastAt == null
+                                      ? 'Never done'
+                                      : 'Last ${_day(s.lastAt!)}',
+                                  'every ${s.interval.describe()}',
+                                ].join(' · '),
+                                style: theme.textTheme.bodySmall,
+                              ),
+                              if (!s.interval.isOff)
+                                Text(
+                                  s.describe(),
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        UrgencyPill(switch (s.level) {
+                          DueLevel.ok => s.interval.isOff ? 'Off' : 'OK',
+                          DueLevel.soon => 'Soon',
+                          DueLevel.overdue => 'Due',
+                        }, urgencyOf(s.level)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+            if (canAdd)
+              FilledButton.icon(
+                key: const Key('start-maintenance'),
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                  openMaintenance(context, aircraftId: drone.aircraftId);
+                },
+                icon: const Icon(Icons.engineering),
+                label: const Text('New maintenance'),
+              ),
+          ],
+        );
+      },
+    );
 
 /// "2026-08-07 10:48:45" -> "07.08.2026"
 String _day(String at) {

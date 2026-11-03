@@ -685,3 +685,60 @@ test('refreshDocuments gives a document changed in Drive its new version', () =>
     ['2026-11-02T12:00:00.000Z', '4'],
   );
 });
+
+const comp = (id, updated_at, extra = {}) => ({ id, updated_at, server_seq: null, deleted: 0, person_id: 'p-anna', type: 'GWO', expires_on: '2027-01-01', ...extra });
+
+test('competencies: each person gets and changes only their own; only the admin verifies', () => {
+  const { anna, post, pilot, sheets } = withPerson('pilot');
+  // The admin adds one for Anna and one for Bob, both verified.
+  post({
+    action: 'sync',
+    push: { competencies: [comp('c-anna', 't1', { verified: 1 }), comp('c-bob', 't1', { person_id: 'p-bob', verified: 1 })] },
+    since: {},
+  });
+  const mine = anna({ action: 'sync', push: {}, since: { competencies: 0 } });
+  assert.deepStrictEqual(mine.pulled.competencies.map((r) => r.id), ['c-anna']);
+  // The shared pilots' key gets none.
+  assert.deepStrictEqual(pilot({ action: 'sync', push: {}, since: { competencies: 0 } }).pulled.competencies, []);
+  // The admin gets all.
+  assert.strictEqual(post({ action: 'sync', push: {}, since: { competencies: 0 } }).pulled.competencies.length, 2);
+
+  const out = anna({
+    action: 'sync',
+    push: {
+      competencies: [
+        comp('c-anna', 't2', { number: '123', verified: 1 }), // own, made by the admin
+        comp('c-bob', 't2', { person_id: 'p-bob' }), // someone else's
+        comp('c-steal', 't2', { person_id: 'p-anna' }), // new, own
+        comp('c-other', 't2', { person_id: 'p-bob' }), // new, for someone else
+      ],
+    },
+    since: { competencies: 3 },
+  });
+  assert.deepStrictEqual(out.accepted.competencies.map((r) => r.id), ['c-anna', 'c-steal']);
+  assert.deepStrictEqual(out.denied.competencies, ['c-bob', 'c-other']);
+  // Bob's row is not sent back to Anna even though her edit was refused.
+  assert.deepStrictEqual(out.pulled.competencies.map((r) => r.id).sort(), ['c-anna', 'c-steal']);
+  const h = sheets.competencies.cells[0];
+  const row = (id) => sheets.competencies.cells.find((r) => r[0] === id);
+  assert.strictEqual(row('c-anna')[h.indexOf('number')], '123');
+  // Her change takes the verified mark off.
+  assert.strictEqual(row('c-anna')[h.indexOf('verified')], '');
+  assert.strictEqual(row('c-bob')[h.indexOf('verified')], '1');
+  // A row moved to Bob is refused too.
+  const move = anna({ action: 'sync', push: { competencies: [comp('c-steal', 't3', { person_id: 'p-bob' })] }, since: {} });
+  assert.deepStrictEqual(move.denied.competencies, ['c-steal']);
+  // She deletes her own.
+  anna({ action: 'sync', push: { competencies: [comp('c-steal', 't4', { deleted: 1 })] }, since: {} });
+  assert.strictEqual(row('c-steal')[h.indexOf('deleted')], '1');
+});
+
+test('only the admin changes maintenance intervals and projects', () => {
+  const { post, pilot, anna } = withPerson('pilot');
+  const farm = { id: 'f1', updated_at: 't1', deleted: 0, name: 'Dogger Bank', coordinates: '54.75, 1.9' };
+  assert.deepStrictEqual(anna({ action: 'sync', push: { projects: [farm] }, since: {} }).denied.projects, ['f1']);
+  assert.strictEqual(post({ action: 'sync', push: { projects: [farm] }, since: {} }).accepted.projects.length, 1);
+  const iv = { id: 'i1', updated_at: 't1', deleted: 0, model: '', section: 'fts', days: '30' };
+  assert.deepStrictEqual(pilot({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).denied.maintenance_intervals, ['i1']);
+  assert.strictEqual(post({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).accepted.maintenance_intervals.length, 1);
+});

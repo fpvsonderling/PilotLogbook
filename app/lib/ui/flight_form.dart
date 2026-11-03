@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../data/competencies.dart';
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/schema.dart';
 import 'services.dart';
+import 'theme.dart';
 
 Future<void> showFlightForm(
   BuildContext context, {
@@ -309,17 +311,33 @@ class _FlightFormState extends State<FlightForm> {
     bool required = false,
   }) {
     final value = _v[key] as String?;
+    // A warning, not a block: the admin sees everyone's competencies, a
+    // pilot only their own.
+    final expired = value == null || key == 'spotter_id'
+        ? const <Competency>[]
+        : CompetencyLog(Services.of(context).db)
+              .expired(value, day: _v['date'] as String?);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String?>(
         initialValue: people.containsKey(value) ? value : null,
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(
+          labelText: label,
+          helperText: expired.isEmpty
+              ? null
+              : 'Expired: ${[for (final c in expired) '${c.type} (${c.expiresOn})'].join(', ')}',
+          helperMaxLines: 3,
+          helperStyle: TextStyle(
+            color: CheckColors.of(context).problem,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         items: [
           if (!required) const DropdownMenuItem(value: null, child: Text('—')),
           for (final e in people.entries)
             DropdownMenuItem(value: e.key, child: Text(e.value)),
         ],
-        onChanged: (id) => _v[key] = id,
+        onChanged: (id) => setState(() => _v[key] = id),
         validator: (v) => required && v == null ? 'Required' : null,
       ),
     );
@@ -369,7 +387,11 @@ class _ChoiceField extends FormField<String> {
                errorText: state.errorText,
              ),
              child: options.isEmpty
-                 ? const Text('Add them under Reference data')
+                 ? Text(
+                     label == 'Project'
+                         ? 'The admin adds projects on the Projects page'
+                         : 'Add them under Reference data',
+                   )
                  : Wrap(
                      spacing: 8,
                      runSpacing: 8,

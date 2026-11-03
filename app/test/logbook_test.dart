@@ -229,11 +229,7 @@ void main() {
       'duration_s': 200,
     });
     db.save(Tables.flights, {'rp_id': pavlo, 'duration_s': 100});
-    db.save(Tables.flights, {
-      'rp_id': emil,
-      'pa_id': pavlo,
-      'duration_s': 50,
-    });
+    db.save(Tables.flights, {'rp_id': emil, 'pa_id': pavlo, 'duration_s': 50});
     db.save(Tables.flights, {'rp_id': emil, 'spotter_id': pavlo});
     db.save(Tables.flights, {'rp_id': emil});
     final gone = db.save(Tables.flights, {'rp_id': pavlo});
