@@ -387,7 +387,11 @@ class _ChoiceField extends FormField<String> {
                errorText: state.errorText,
              ),
              child: options.isEmpty
-                 ? const Text('Add them under Reference data')
+                 ? Text(
+                     label == 'Project'
+                         ? 'The admin adds projects on the Projects page'
+                         : 'Add them under Reference data',
+                   )
                  : Wrap(
                      spacing: 8,
                      runSpacing: 8,

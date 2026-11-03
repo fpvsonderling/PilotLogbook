@@ -45,9 +45,19 @@ class Tables {
     Col('active', ColType.integer),
   ]);
 
+  // Projects (wind farms). Only the admin adds and changes them.
   static const projects = TableDef('projects', [
     Col('name'),
     Col('active', ColType.integer),
+    Col('client'),
+    Col('country'),
+    // One point per line, "lat, lon" or "T01: lat, lon" (see projects.dart).
+    Col('coordinates'),
+    // Own Google Maps link; empty: made from the first point.
+    Col('maps_url'),
+    // The country's drone zone map, pasted by the admin.
+    Col('zone_map_url'),
+    Col('notes'),
   ]);
 
   static const aircraft = TableDef('aircraft', [

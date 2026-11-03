@@ -9,6 +9,7 @@ import 'faults_page.dart';
 import 'flights_page.dart';
 import 'maintenance_page.dart';
 import 'nm_page.dart';
+import 'projects_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
 import 'settings_page.dart';
@@ -39,6 +40,7 @@ class _HomePageState extends State<HomePage> {
     (Icons.checklist, 'Daily checks', () => const DailyChecksPage()),
     (Icons.handyman, 'Fault Repair', () => const FaultsPage()),
     (Icons.engineering, 'Maintenance', () => const MaintenancePage()),
+    (Icons.location_on, 'Projects', () => const ProjectsPage()),
     (Icons.verified_user, 'Competencies', () => const CompetenciesPage()),
     (Icons.bar_chart, 'Statistic', () => const StatsPage()),
     (Icons.list_alt, 'Reference data', () => const ReferencePage()),
@@ -178,27 +180,20 @@ class _AlertCount extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: tooltip,
-    child: TextButton.icon(
-      style: TextButton.styleFrom(foregroundColor: Colors.white),
-      onPressed: onTap,
-      icon: Icon(icon),
-      label: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-        decoration: BoxDecoration(
-          color: AppPalette.gold,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(
-          '$count',
-          style: const TextStyle(
-            color: AppPalette.text,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip,
+    color: Colors.white,
+    onPressed: onTap,
+    // A small gold count on the icon, so the page title still fits on a
+    // phone.
+    icon: Badge(
+      backgroundColor: AppPalette.gold,
+      textColor: AppPalette.text,
+      label: Text(
+        '$count',
+        style: const TextStyle(fontWeight: FontWeight.w700),
       ),
+      child: Icon(icon),
     ),
   );
 }

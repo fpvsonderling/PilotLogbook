@@ -23,7 +23,7 @@
 // SCHEMA-START (kept equal to app/lib/data/schema.dart by a test)
 const SCHEMA = {
   people: ['name', 'roles', 'email', 'active'],
-  projects: ['name', 'active'],
+  projects: ['name', 'active', 'client', 'country', 'coordinates', 'maps_url', 'zone_map_url', 'notes'],
   aircraft: ['name', 'model', 'serial', 'active', 'usage'],
   batteries: ['name', 'set_name', 'serial', 'active', 'aircraft_ids'],
   mission_types: ['name', 'active'],
@@ -51,7 +51,7 @@ const BACKUP_FOLDER = 'PilotLogbook Backups';
 const PHOTO_FOLDER = 'PilotLogbook Photos';
 const DOCUMENT_FOLDER = 'PilotLogbook Documents';
 // Tables only the admin link may add to, change or delete.
-const ADMIN_ONLY_TABLES = ['documents', 'maintenance_intervals'];
+const ADMIN_ONLY_TABLES = ['documents', 'maintenance_intervals', 'projects'];
 // Tables of one person's own rows (column person_id): only that person
 // (with their own key) and the admin get them, add, change and delete them;
 // only the admin sets verified.
@@ -309,7 +309,7 @@ function json_(obj) {
 /**
  * [user] is { admin, me, readOnly } from user_(). A read only key changes
  * nothing: every row it sends is denied. Only the admin changes the tables
- * in ADMIN_ONLY_TABLES (documents). In PERSONAL_TABLES (competencies) a
+ * in ADMIN_ONLY_TABLES (documents, projects, intervals). In PERSONAL_TABLES (competencies) a
  * person gets, adds and changes only the rows of their own person_id, and
  * their change clears verified. The admin changes anything. Others
  * change and delete only rows whose created_by is their own people id;

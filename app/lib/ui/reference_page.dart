@@ -7,14 +7,14 @@ import '../data/schema.dart';
 import 'intervals_tab.dart';
 import 'services.dart';
 
-/// People, projects, drones, batteries and mission types: the lists every
-/// form picks from, instead of names typed by hand.
+/// People, drones, batteries and mission types: the lists every form
+/// picks from, instead of names typed by hand (projects have their own
+/// page), and the maintenance intervals.
 class ReferencePage extends StatelessWidget {
   const ReferencePage({super.key});
 
   static const _tabs = [
     ('People', Tables.people),
-    ('Projects', Tables.projects),
     ('Drones', Tables.aircraft),
     ('Batteries', Tables.batteries),
     ('Mission types', Tables.missionTypes),

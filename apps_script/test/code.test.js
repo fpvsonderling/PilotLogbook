@@ -733,8 +733,11 @@ test('competencies: each person gets and changes only their own; only the admin 
   assert.strictEqual(row('c-steal')[h.indexOf('deleted')], '1');
 });
 
-test('only the admin changes maintenance intervals', () => {
-  const { post, pilot } = load();
+test('only the admin changes maintenance intervals and projects', () => {
+  const { post, pilot, anna } = withPerson('pilot');
+  const farm = { id: 'f1', updated_at: 't1', deleted: 0, name: 'Dogger Bank', coordinates: '54.75, 1.9' };
+  assert.deepStrictEqual(anna({ action: 'sync', push: { projects: [farm] }, since: {} }).denied.projects, ['f1']);
+  assert.strictEqual(post({ action: 'sync', push: { projects: [farm] }, since: {} }).accepted.projects.length, 1);
   const iv = { id: 'i1', updated_at: 't1', deleted: 0, model: '', section: 'fts', days: '30' };
   assert.deepStrictEqual(pilot({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).denied.maintenance_intervals, ['i1']);
   assert.strictEqual(post({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).accepted.maintenance_intervals.length, 1);

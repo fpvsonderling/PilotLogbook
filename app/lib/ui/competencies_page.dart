@@ -137,19 +137,25 @@ class _CompetencyCard extends StatelessWidget {
                       style: theme.textTheme.titleMedium,
                     ),
                   ),
-                  if (c.verified) ...[
-                    Icon(
-                      Icons.verified,
-                      size: 18,
-                      color: theme.colorScheme.primary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text('Verified', style: muted),
-                    const SizedBox(width: 8),
-                  ],
+                  const SizedBox(width: 8),
                   UrgencyPill(c.describe(today), urgencyOfCompetency(status)),
                 ],
               ),
+              if (c.verified)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.verified,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text('Verified', style: muted),
+                    ],
+                  ),
+                ),
               const SizedBox(height: 4),
               Text(
                 [
