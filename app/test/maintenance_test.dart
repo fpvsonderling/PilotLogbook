@@ -235,10 +235,11 @@ void main() {
       'duration_s': 11 * 3600,
     });
     final d19m = log.drones().firstWhere((x) => x.aircraftId == d19);
-    expect(
-      d19m.due.map((s) => s.section.column),
-      ['propulsion_system', 'load_assembly', 'power_system'],
-    );
+    expect(d19m.due.map((s) => s.section.column), [
+      'propulsion_system',
+      'load_assembly',
+      'power_system',
+    ]);
     expect(d19m.level, DueLevel.overdue);
   });
 

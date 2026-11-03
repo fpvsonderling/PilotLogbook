@@ -211,7 +211,9 @@ class SyncService extends ChangeNotifier {
     final seqs = (answer['seq'] as Map?) ?? const {};
     final denied = (answer['denied'] as Map?) ?? const {};
     db.transaction(() {
-      db.setSetting(adminKey, answer['admin'] == true ? '1' : '0');
+      final wasAdmin = isAdmin;
+      final nowAdmin = answer['admin'] == true;
+      db.setSetting(adminKey, nowAdmin ? '1' : '0');
       db.setSetting(readOnlyKey, answer['readOnly'] == true ? '1' : '0');
       final me = answer['me'];
       db.setSetting(LocalDb.meKey, me is String && me.isNotEmpty ? me : null);
@@ -237,6 +239,17 @@ class SyncService extends ChangeNotifier {
         }
         final seq = seqs[t.name];
         if (seq is num) db.setLastSeq(t, seq.toInt());
+      }
+      // Other people's competencies are for the admin only: a key that is
+      // not (any more) the admin's keeps only its own person's, and a new
+      // admin key downloads everyone's on the next sync.
+      final mine = me is String ? me : '';
+      for (final t in Tables.personal) {
+        if (!nowAdmin) {
+          db.forget(t, "COALESCE(person_id, '') <> ? AND dirty = 0", [mine]);
+        } else if (!wasAdmin) {
+          db.setLastSeq(t, 0);
+        }
       }
     });
     return SyncResult(pushed: pushed, pulled: pulled);

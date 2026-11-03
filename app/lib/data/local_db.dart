@@ -152,6 +152,12 @@ class LocalDb {
       {for (final n in table.columnNames) n: r[n]},
   ];
 
+  /// Removes rows from this device only (nothing is uploaded), e.g. rows
+  /// this key may no longer see.
+  void forget(TableDef table, String where, [List<Object?> args = const []]) {
+    _db.execute('DELETE FROM ${table.name} WHERE $where', args);
+  }
+
   /// Clears the dirty flag after the spreadsheet accepted a row. A row edited
   /// again while the upload ran keeps its flag, since its updated_at moved.
   void markSynced(TableDef table, String id, String updatedAt, int serverSeq) {

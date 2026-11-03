@@ -237,6 +237,22 @@ class Tables {
     Col('notes'),
   ]);
 
+  // A person's licences, trainings, medicals and insurance. Only that
+  // person (own key) and the admin get, add and change them; only the admin
+  // marks one verified, and the person's own change clears it again. No
+  // scans in the app: url is a link to the document in Google Drive.
+  static const competencies = TableDef('competencies', [
+    Col('person_id'),
+    Col('type'), // e.g. GWO, Medical, see competencyTypes
+    Col('number'),
+    Col('issued_on'), // yyyy-MM-dd
+    Col('expires_on'), // yyyy-MM-dd, empty = does not expire
+    Col('url'),
+    Col('notes'),
+    Col('verified', ColType.integer), // 1 = the admin checked the document
+    Col('verified_by'), // people id, empty for the master admin key
+  ]);
+
   // Documents every pilot needs. Only the admin link adds, changes and
   // deletes them. The file is in Google Drive; each app keeps a copy for
   // offline use (see documents.dart).
@@ -272,8 +288,13 @@ class Tables {
     maintenance,
     maintenanceIntervals,
     torqueSpecs,
+    competencies,
     documents,
   ];
+
+  /// Tables of one person's own rows (person_id): the script gives each
+  /// person only theirs, the admin everyone's. See PERSONAL_TABLES in Code.gs.
+  static const personal = [competencies];
 
   static TableDef byName(String name) => all.firstWhere((t) => t.name == name);
 }
