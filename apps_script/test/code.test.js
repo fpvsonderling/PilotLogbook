@@ -789,9 +789,11 @@ test('Firebase rules in Code.gs equal the files in firebase/', () => {
   }
 });
 
-test('moveToFirebase needs the project ids first', () => {
+test('the Firebase project is pilotlogbook-dbda6', () => {
   const { ctx } = load();
-  assert.throws(() => ctx.moveToFirebase(), /FIREBASE_PROJECT_ID/);
+  const fb = ctx.firebaseConfig_();
+  assert.strictEqual(fb.project, 'pilotlogbook-dbda6');
+  assert.strictEqual(fb.bucket, 'pilotlogbook-dbda6.firebasestorage.app');
 });
 
 test('moveToFirebase copies tables, makes keys and hands them out', () => {
@@ -807,15 +809,13 @@ test('moveToFirebase copies tables, makes keys and hands them out', () => {
     since: {},
   });
   const anna = s.post({ action: 'personLink', person_id: 'p1' }).token;
-  props.FIREBASE_PROJECT_ID = 'pl-test';
-  props.FIREBASE_API_KEY = 'api-key';
 
   const result = ctx.moveToFirebase();
   assert.strictEqual(result.left, 0);
   assert.match(result.masterKey, /^PL2-/);
   assert.deepStrictEqual(
     Buffer.from(result.masterKey.slice(4), 'base64url').toString().split(' ').slice(0, 2),
-    ['pl-test', 'api-key'],
+    ['pilotlogbook-dbda6', 'AIzaSyDMAoZ2aykFFpEsn-Rmz1rAVC-dwTVOKi0'],
   );
 
   // Rows as text, with the server's time; server_seq is not carried over.
@@ -834,7 +834,7 @@ test('moveToFirebase copies tables, makes keys and hands them out', () => {
   // The photo went to Storage and its row says where.
   assert.ok('photos/ph1.jpg' in firebase.files);
   assert.strictEqual(firebase.docs['fault_photos/ph1'].storage_path, 'photos/ph1.jpg');
-  assert.strictEqual(firebase.docs['meta/config'].bucket, 'pl-test.firebasestorage.app');
+  assert.strictEqual(firebase.docs['meta/config'].bucket, 'pilotlogbook-dbda6.firebasestorage.app');
   assert.strictEqual(firebase.rules.filter((r) => r.url.endsWith('/rulesets')).length, 2);
 
   // Every app now gets its new key; unknown keys an error.
@@ -855,8 +855,6 @@ test('moveToFirebase copies tables, makes keys and hands them out', () => {
 
 test('mirrorFromFirebase writes Firestore back into the tabs', () => {
   const s = load();
-  s.props.FIREBASE_PROJECT_ID = 'pl-test';
-  s.props.FIREBASE_API_KEY = 'api-key';
   s.firebase.docs['flights/f9'] = { id: 'f9', notes: 'from firebase', deleted: '0', server_time: '2026-11-08T10:00:00Z' };
   s.ctx.mirrorFromFirebase();
   const sheet = s.sheets.flights;

@@ -1132,8 +1132,8 @@ function seconds_(takeoff, land) {
  * (Project settings > General: "Project ID" and "Web API key"), save, then
  * run moveToFirebase() and, after it, installFirebaseTriggers().
  */
-const FIREBASE_PROJECT_ID = '';
-const FIREBASE_API_KEY = '';
+const FIREBASE_PROJECT_ID = 'pilotlogbook-dbda6';
+const FIREBASE_API_KEY = 'AIzaSyDMAoZ2aykFFpEsn-Rmz1rAVC-dwTVOKi0';
 
 // FIRESTORE-RULES-START (kept equal to firebase/firestore.rules by a test)
 const FIRESTORE_RULES = String.raw`rules_version = '2';
