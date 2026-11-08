@@ -7,6 +7,7 @@ import '../data/logbook.dart';
 import '../data/schema.dart';
 import 'services.dart';
 import 'theme.dart';
+import 'time_picker.dart';
 
 Future<void> showFlightForm(
   BuildContext context, {
@@ -216,6 +217,8 @@ class _FlightFormState extends State<FlightForm> {
                   label: 'Land',
                   controller: _landing,
                   now: () => _timeFormat.format(DateTime.now()),
+                  // The clock starts at take-off when landing is still empty.
+                  fallback: _takeoff,
                 ),
                 if (_cargo) ...[
                   // The batteries of the chosen drone; rebuilt when it changes.
@@ -461,26 +464,56 @@ class _TimeField extends StatelessWidget {
     required this.label,
     required this.controller,
     required this.now,
+    this.fallback,
   });
 
   final String label;
   final TextEditingController controller;
   final String Function() now;
+  final TextEditingController? fallback;
+
+  Future<void> _pick(BuildContext context) async {
+    final initial =
+        parseTimeOfDay(controller.text) ??
+        parseTimeOfDay(fallback?.text) ??
+        parseTimeOfDay(now())!;
+    final picked = await showSecondsTimePicker(
+      context,
+      title: label,
+      initial: initial,
+    );
+    if (picked != null) controller.text = formatTimeOfDay(picked);
+  }
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: TextFormField(
-      controller: controller,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: 'HH:mm:ss',
-        suffixIcon: TextButton(
-          onPressed: () => controller.text = now(),
-          child: const Text('Now'),
+  Widget build(BuildContext context) {
+    // On a phone a tap opens the clock and no keyboard; on a PC the time
+    // can still be typed, and the clock button opens the clock.
+    final touch = switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: controller,
+        keyboardType: touch ? TextInputType.none : TextInputType.datetime,
+        onTap: touch ? () => _pick(context) : null,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: 'HH:mm:ss',
+          prefixIcon: IconButton(
+            tooltip: 'Clock',
+            icon: const Icon(Icons.schedule),
+            onPressed: () => _pick(context),
+          ),
+          suffixIcon: TextButton(
+            onPressed: () => controller.text = now(),
+            child: const Text('Now'),
+          ),
         ),
+        validator: (v) => parseTimeOfDay(v) == null ? 'Time as HH:mm:ss' : null,
       ),
-      validator: (v) => parseTimeOfDay(v) == null ? 'Time as HH:mm:ss' : null,
-    ),
-  );
+    );
+  }
 }
