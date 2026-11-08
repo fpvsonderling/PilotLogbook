@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/schema.dart';
+import '../data/update_check.dart';
 import 'services.dart';
+import 'update_banner.dart';
 
 /// The access key that connects this device to the company's data.
 class SettingsPage extends StatefulWidget {
@@ -221,6 +223,7 @@ class _About extends StatelessWidget {
               'Pilot Logbook $appVersion',
               style: muted,
             ),
+            const _UpdateStatus(),
           ],
         ),
       ),
@@ -234,3 +237,52 @@ const appVersion = String.fromEnvironment(
   'APP_VERSION',
   defaultValue: 'dev build',
 );
+
+/// Under the version: whether a newer one is out, and a button to look.
+class _UpdateStatus extends StatelessWidget {
+  const _UpdateStatus();
+
+  @override
+  Widget build(BuildContext context) {
+    final updates = Services.of(context).updates;
+    if (updates == null || parseAppVersion(updates.current) == null) {
+      return const SizedBox.shrink();
+    }
+    return ListenableBuilder(
+      listenable: updates,
+      builder: (context, _) {
+        final newer = updates.newer;
+        return Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: newer != null
+              ? FilledButton.icon(
+                  key: const Key('settings-update'),
+                  icon: const Icon(Icons.system_update),
+                  label: Text('Install version ${newer.version}'),
+                  onPressed: () => showUpdateDialog(context, updates),
+                )
+              : OutlinedButton.icon(
+                  key: const Key('settings-check-update'),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Check for a new version'),
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final answered = await updates.check(force: true);
+                    if (updates.newer == null) {
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            answered
+                                ? 'This is the newest version'
+                                : 'Could not check: no internet?',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                ),
+        );
+      },
+    );
+  }
+}

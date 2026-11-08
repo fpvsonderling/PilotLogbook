@@ -15,6 +15,7 @@ import 'services.dart';
 import 'settings_page.dart';
 import 'stats_page.dart';
 import 'theme.dart';
+import 'update_banner.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -86,39 +87,47 @@ class _HomePageState extends State<HomePage> {
               ],
             )
           : null,
-      body: narrow
-          ? _page()
-          : Row(
-              children: [
-                // Scrolls when the window is too low for every item.
-                LayoutBuilder(
-                  builder: (context, constraints) => SingleChildScrollView(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: IntrinsicHeight(
-                        child: NavigationRail(
-                          selectedIndex: _index,
-                          onDestinationSelected: (i) =>
-                              setState(() => _index = i),
-                          labelType: NavigationRailLabelType.all,
-                          destinations: [
-                            for (final (icon, label, _) in _pages)
-                              NavigationRailDestination(
-                                icon: Icon(icon),
-                                label: Text(label),
+      body: Column(
+        children: [
+          const UpdateBanner(),
+          Expanded(
+            child: narrow
+                ? _page()
+                : Row(
+                    children: [
+                      // Scrolls when the window is too low for every item.
+                      LayoutBuilder(
+                        builder: (context, constraints) =>
+                            SingleChildScrollView(
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minHeight: constraints.maxHeight,
+                                ),
+                                child: IntrinsicHeight(
+                                  child: NavigationRail(
+                                    selectedIndex: _index,
+                                    onDestinationSelected: (i) =>
+                                        setState(() => _index = i),
+                                    labelType: NavigationRailLabelType.all,
+                                    destinations: [
+                                      for (final (icon, label, _) in _pages)
+                                        NavigationRailDestination(
+                                          icon: Icon(icon),
+                                          label: Text(label),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                          ],
-                        ),
+                            ),
                       ),
-                    ),
+                      const VerticalDivider(width: 1),
+                      Expanded(child: _page()),
+                    ],
                   ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(child: _page()),
-              ],
-            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -225,6 +225,8 @@ jobs:
             **Mac:** pobierz `PilotLogbook-macos-${{ env.VERSION }}.zip`, rozpakuj i przeciągnij `Pilot Logbook` do Aplikacji. Za pierwszym razem: prawy klik → Otwórz → Otwórz.
             **iPhone / iPad:** nowa wersja jest w aplikacji TestFlight.
 
+            <!-- pilotlogbook-build: ${{ github.run_number }} (the app compares its own build number with this to ask for an update) -->
+
   ios:
     runs-on: macos-latest
     needs: test
