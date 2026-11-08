@@ -216,6 +216,8 @@ class Tables {
   // Maintenance: one row per maintenance of a drone, one column per
   // assembly with "Checked" or what was done (see maintenance.dart), like
   // the old AppSheet "Maintenance" sheet.
+  // A row with battery_id (and no aircraft_id) is the Power System
+  // maintenance of that battery set: batteries move between drones.
   static const maintenance = TableDef('maintenance', [
     Col('performed_at'), // yyyy-MM-dd HH:mm:ss, local time
     Col('aircraft_id'),
@@ -228,6 +230,7 @@ class Tables {
     Col('power_system'),
     Col('fts'),
     Col('notes'),
+    Col('battery_id'),
   ]);
 
   // How often each maintenance assembly is due, whichever comes first.

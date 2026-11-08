@@ -124,12 +124,33 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    await tester.tap(find.byKey(const Key('save-check')));
+    // The keyboard is open while typing a note: Save stays on screen at the
+    // top, above the keyboard.
+    await tester.scrollUntilVisible(
+      find.widgetWithText(TextField, 'Other notes'),
+      200,
+      scrollable: list,
+    );
+    await tester.tap(find.widgetWithText(TextField, 'Other notes'));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Other notes'),
+      'Props replaced',
+    );
+    await tester.pumpAndSettle();
+    final save = find.byKey(const Key('save-check'));
+    expect(save.hitTestable(), findsOneWidget);
+    final screenHeight =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    expect(tester.getBottomLeft(save).dy, lessThan(screenHeight / 3));
+
+    await tester.tap(save);
     await tester.pumpAndSettle();
     expect(find.text('Ready to fly'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-save-check')));
     await tester.pumpAndSettle();
     expect(db.rows(Tables.dailyChecksFb3).single['storage'], 'Ok');
+    expect(db.rows(Tables.dailyChecksFb3).single['notes'], 'Props replaced');
   });
 
   testWidgets('Statistic fills the phone width with two tiles a row', (

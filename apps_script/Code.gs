@@ -38,7 +38,7 @@ const SCHEMA = {
   fault_repairs: ['fault_id', 'started_at', 'finished_at', 'technicians', 'work_performed', 'materials_used', 'notes'],
   fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
   fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url', 'storage_path'],
-  maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
+  maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes', 'battery_id'],
   maintenance_intervals: ['model', 'section', 'hours', 'flights', 'days'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   competencies: ['person_id', 'type', 'number', 'issued_on', 'expires_on', 'url', 'notes', 'verified', 'verified_by'],
