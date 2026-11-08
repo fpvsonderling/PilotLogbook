@@ -138,7 +138,8 @@ class _FaultPhotoState extends State<FaultPhoto> {
   }
 
   void _load() {
-    final key = '${widget.row['id']}:${widget.row['drive_file_id']}';
+    final key =
+        '${widget.row['id']}:${widget.row['drive_file_id']}:${widget.row['storage_path']}';
     if (key == _key) return;
     _key = key;
     _file = Services.of(context).sync.photoFile(widget.row);

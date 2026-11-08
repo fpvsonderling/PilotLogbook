@@ -3,3 +3,4 @@
 .vscode/
 *.iml
 node_modules/
+*-debug.log

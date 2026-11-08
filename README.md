@@ -85,6 +85,37 @@ Apps Script в Google-таблице  ──►  листы: flights, people, ai
 
 Каждое устройство хранит копии файлов у себя: после синхронизации скачиваются все документы (переключатель **Keep all documents on this device**; если выключить, файл скачивается при первом открытии) и дальше открываются без интернета. Заново файл скачивается только когда он изменился: каждый час триггер `refreshDocuments` проверяет файлы в Drive. Чтобы включить триггер, один раз запустите `installTriggers` в Apps Script. Удалённый из списка документ удаляется и с устройств; сам файл в Drive остаётся.
 
+## Переход на Firebase
+
+С версии, где это появилось, приложение умеет работать и с Google-таблицей (ключ `PL1-…`), и с Firebase (ключ `PL2-…`). Данные — в Cloud Firestore (каждая таблица — коллекция, строка — документ с тем же `id`), фото неисправностей и документы — в Cloud Storage for Firebase. Приложение по-прежнему работает офлайн со своей SQLite и ходит в Firebase через REST, без Firebase SDK.
+
+```
+Приложение (SQLite, офлайн) ──► Firebase Auth: ключ = аккаунт (email + пароль внутри ключа)
+                            ──► Firestore: flights, people, ... + meta/changes, members
+                            ──► Storage: photos/<id>.jpg, documents/<папка>/<файл>
+Apps Script раз в сутки копирует Firestore обратно в листы таблицы (читаемая копия),
+1-го числа — копия таблицы в PilotLogbook Backups, как раньше.
+```
+
+- Права те же, что были в скрипте: главный ключ, общий ключ пилотов (только добавляет), личные ключи (роль admin / viewer из People). Их проверяют правила `firebase/firestore.rules` и `firebase/storage.rules`.
+- `members/{uid}`: чей ключ (`kind` master / shared / person, `person_id`, `active`). Новый личный ключ делает админ в приложении, как раньше.
+- `meta/changes`: время последнего изменения каждой таблицы; синхронизация без изменений читает один документ.
+
+Порядок переезда:
+
+1. Выпустить версию приложения с Firebase и обновить приложение у всех.
+2. В [консоли Firebase](https://console.firebase.google.com) тем же Google-аккаунтом, что и таблица: создать проект; перейти на план Blaze (нужен для Storage) и поставить бюджетный алерт; **Firestore Database → Create database** (eur3, production mode); **Authentication → Get started → Email/Password → Enable**; **Storage → Get started**.
+3. В `Code.gs` вставить **Project ID** и **Web API key** (Project settings → General) в `FIREBASE_PROJECT_ID` и `FIREBASE_API_KEY`, сохранить, запустить `moveToFirebase` (если пишет «Run again» — запустить ещё раз), затем `installFirebaseTriggers`, и обновить развёртывание (новая версия того же Web app).
+4. Всё. Каждое приложение при следующей синхронизации получает от скрипта свой новый ключ `PL2-…` и дальше работает с Firebase. Таблица больше не принимает изменения, только раз в сутки обновляется копией из Firebase.
+
+Тесты правил и синхронизации на эмуляторах Firebase (нужны Node и Java):
+
+```bash
+cd firebase
+npm ci
+npm test
+```
+
 ## Безопасность
 
 Любой ключ даёт доступ к данным, поэтому не публикуйте ключи. Утёк личный ключ: **New key** у этого человека или снимите ему Active. Утёк общий ключ: `disableSharedKey`, или удалите свойство `API_TOKEN` в **Настройках проекта → Свойства скрипта**, снова запустите `setup`, затем `connectionLink`. Для главного ключа то же самое со свойством `ADMIN_TOKEN`. Личные ключи хранятся в свойстве `PERSON_TOKENS`: удалите его, чтобы отключить все личные ключи сразу.

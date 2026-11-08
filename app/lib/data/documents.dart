@@ -19,8 +19,16 @@ class DocumentStore {
   File _versionFile(String id) => File(p.join(dir, id, '.version'));
 
   /// Which file and version the row asks for; a copy of another one is old.
-  static String versionOf(DbRow row) =>
-      '${row['drive_file_id'] ?? ''}|${row['file_version'] ?? ''}';
+  static String versionOf(DbRow row) {
+    final drive = row['drive_file_id'] as String? ?? '';
+    final where = drive.isNotEmpty ? drive : row['storage_path'] ?? '';
+    return '$where|${row['file_version'] ?? ''}';
+  }
+
+  /// Whether the row has a file (in Drive or in Firebase), not only a link.
+  static bool hasFile(DbRow row) =>
+      (row['drive_file_id'] as String? ?? '').isNotEmpty ||
+      (row['storage_path'] as String? ?? '').isNotEmpty;
 
   /// The name the file is saved and opened under, so the system picks the
   /// right program from its extension.

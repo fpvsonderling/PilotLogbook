@@ -8,18 +8,16 @@ import '../documents.dart';
 import '../local_db.dart';
 import '../photos.dart';
 import '../schema.dart';
+import 'firebase_client.dart';
+import 'firebase_sync.dart';
+import 'sync_errors.dart';
+
+export 'sync_errors.dart';
 
 /// Sends one JSON request to the spreadsheet's Apps Script and returns its
 /// JSON answer. An interface so tests can run sync without the network.
 abstract class SyncTransport {
   Future<Map<String, Object?>> call(Map<String, Object?> body);
-}
-
-class SyncException implements Exception {
-  SyncException(this.message);
-  final String message;
-  @override
-  String toString() => message;
 }
 
 /// Talks to the Apps Script web app deployed from apps_script/Code.gs.
@@ -61,6 +59,8 @@ class AppsScriptTransport implements SyncTransport {
     if (decoded is! Map<String, Object?>) {
       throw SyncException('Unexpected answer from the script');
     }
+    final moved = decoded['moved_to'];
+    if (moved is String && moved.isNotEmpty) throw MovedToFirebase(moved);
     if (decoded['ok'] != true) {
       throw SyncException('${decoded['error'] ?? 'Sync failed'}');
     }
@@ -98,11 +98,35 @@ class SyncService extends ChangeNotifier {
   static const adminKey = 'is_admin';
   static const readOnlyKey = 'read_only';
 
+  /// The Firebase access key (PL2-…), when this device syncs with Firebase.
+  static const firebaseKeyKey = 'firebase_key';
+
   /// '0' when this device downloads documents only when they are opened;
   /// otherwise every document is downloaded after each sync.
   static const documentsOfflineKey = 'documents_offline';
 
   String? get url => db.setting(urlKey);
+
+  /// The Firebase key, or null when this device syncs with Google Sheets.
+  FirebaseKey? get firebaseKey =>
+      FirebaseKey.decode(db.setting(firebaseKeyKey) ?? '');
+
+  /// Whether data and files are in Firebase (else Google Sheets and Drive).
+  bool get usesFirebase => firebaseKey != null;
+
+  /// Builds the Firebase client from the key; replaced in tests.
+  FirebaseClient Function(FirebaseKey key) firebaseFactory = FirebaseClient.new;
+
+  FirebaseClient? _firebaseClient;
+
+  FirebaseSync _firebase() {
+    final key = firebaseKey!;
+    var c = _firebaseClient;
+    if (c == null || c.key.encode() != key.encode()) {
+      c = _firebaseClient = firebaseFactory(key);
+    }
+    return FirebaseSync(db, c);
+  }
 
   /// True when the link is the admin link: the script then accepts changes
   /// and deletes of every row, and the app shows those controls. Known after
@@ -130,6 +154,7 @@ class SyncService extends ChangeNotifier {
   /// The admin makes a person's own access key, to send to them. [renew]
   /// makes a new one and turns the old one off.
   Future<String> personKey(String personId, {bool renew = false}) async {
+    if (usesFirebase) return _firebase().personKey(personId, renew: renew);
     final answer = await transportFactory(url!)({
       'action': 'personLink',
       'token': token,
@@ -140,27 +165,51 @@ class SyncService extends ChangeNotifier {
   }
 
   String? get token => db.setting(tokenKey);
-  bool get configured => (url ?? '').isNotEmpty && (token ?? '').isNotEmpty;
+  bool get configured =>
+      usesFirebase || ((url ?? '').isNotEmpty && (token ?? '').isNotEmpty);
 
   /// Saves an access key (or an old-style connection link, which still
   /// works); false when the text is neither.
   bool setAccessKey(String text) {
+    final firebase = FirebaseKey.decode(text);
+    if (firebase != null) {
+      final before = db.setting(firebaseKeyKey);
+      if (before != firebase.encode()) {
+        _forgetRole();
+        // Everything is downloaded once from Firebase; rows already here
+        // are kept and merged as on every sync.
+        if (before == null) db.resetSyncState();
+      }
+      db.setSetting(firebaseKeyKey, firebase.encode());
+      notifyListeners();
+      return true;
+    }
     final decoded = decodeAccessKey(text);
     if (decoded == null) return false;
     final (url, key) = decoded;
-    db.setSetting(urlKey, url);
-    if (key != token) {
-      db.setSetting(adminKey, null);
-      db.setSetting(readOnlyKey, null);
-      db.setSetting(LocalDb.meKey, null);
+    if (usesFirebase) {
+      db.setSetting(firebaseKeyKey, null);
+      db.resetSyncState();
     }
+    db.setSetting(urlKey, url);
+    if (key != token) _forgetRole();
     db.setSetting(tokenKey, key);
     notifyListeners();
     return true;
   }
 
+  void _forgetRole() {
+    db.setSetting(adminKey, null);
+    db.setSetting(readOnlyKey, null);
+    db.setSetting(LocalDb.meKey, null);
+  }
+
   /// The saved access key, to show (hidden) in Settings.
-  String get accessKey => configured ? encodeAccessKey(url!, token!) : '';
+  String get accessKey {
+    final firebase = firebaseKey;
+    if (firebase != null) return firebase.encode();
+    return configured ? encodeAccessKey(url!, token!) : '';
+  }
 
   /// Builds the transport from settings; replaced in tests.
   SyncTransport Function(String url) transportFactory = AppsScriptTransport.new;
@@ -174,7 +223,17 @@ class SyncService extends ChangeNotifier {
     lastError = null;
     notifyListeners();
     try {
-      final result = await _sync(transportFactory(url!));
+      SyncResult result;
+      try {
+        result = usesFirebase
+            ? await _syncFirebase()
+            : await _sync(transportFactory(url!));
+      } on MovedToFirebase catch (moved) {
+        // The admin moved the data to Firebase: the script hands out this
+        // device's new key once, and from now on it syncs there.
+        if (!setAccessKey(moved.accessKey) || !usesFirebase) rethrow;
+        result = await _syncFirebase();
+      }
       lastSyncedAt = DateTime.now();
       _afterSync();
       return result;
@@ -184,6 +243,36 @@ class SyncService extends ChangeNotifier {
     } finally {
       _running = false;
       notifyListeners();
+    }
+  }
+
+  Future<SyncResult> _syncFirebase() async {
+    final firebase = _firebase();
+    final account = await firebase.account();
+    final waiting = await _uploadPhotosFirebase(firebase, account);
+    final wasAdmin = isAdmin;
+    db.setSetting(adminKey, account.admin ? '1' : '0');
+    db.setSetting(readOnlyKey, account.readOnly ? '1' : '0');
+    db.setSetting(LocalDb.meKey, account.me.isEmpty ? null : account.me);
+    _forgetOthersPersonal(account.admin, wasAdmin, account.me);
+    final (pushed, pulled) = await firebase.run(
+      account,
+      skip: {Tables.faultPhotos: waiting},
+    );
+    db.changes.notify();
+    return SyncResult(pushed: pushed, pulled: pulled);
+  }
+
+  /// Other people's competencies are for the admin only: a key that is not
+  /// (any more) the admin's keeps only its own person's, and a new admin
+  /// key downloads everyone's.
+  void _forgetOthersPersonal(bool nowAdmin, bool wasAdmin, String mine) {
+    for (final t in Tables.personal) {
+      if (!nowAdmin) {
+        db.forget(t, "COALESCE(person_id, '') <> ? AND dirty = 0", [mine]);
+      } else if (!wasAdmin) {
+        db.setLastSeq(t, 0);
+      }
     }
   }
 
@@ -240,17 +329,7 @@ class SyncService extends ChangeNotifier {
         final seq = seqs[t.name];
         if (seq is num) db.setLastSeq(t, seq.toInt());
       }
-      // Other people's competencies are for the admin only: a key that is
-      // not (any more) the admin's keeps only its own person's, and a new
-      // admin key downloads everyone's on the next sync.
-      final mine = me is String ? me : '';
-      for (final t in Tables.personal) {
-        if (!nowAdmin) {
-          db.forget(t, "COALESCE(person_id, '') <> ? AND dirty = 0", [mine]);
-        } else if (!wasAdmin) {
-          db.setLastSeq(t, 0);
-        }
-      }
+      _forgetOthersPersonal(nowAdmin, wasAdmin, me is String ? me : '');
     });
     return SyncResult(pushed: pushed, pulled: pulled);
   }
@@ -307,6 +386,19 @@ class SyncService extends ChangeNotifier {
     if (!configured) throw SyncException('Sync is not set up');
     final name = file.uri.pathSegments.last;
     final mime = mimeTypeOf(name);
+    if (usesFirebase) {
+      final path = 'documents/${LocalDb.newId()}/$name';
+      await _firebase().upload(path, file, mime);
+      return {
+        'storage_path': path,
+        'drive_file_id': null,
+        'file_name': name,
+        'mime_type': mime,
+        'size_bytes': await file.length(),
+        'file_version': DateTime.now().toUtc().toIso8601String(),
+        'url': null,
+      };
+    }
     final transport = transportFactory(url!);
     final start = await transport({
       'action': 'documentUpload',
@@ -322,6 +414,11 @@ class SyncService extends ChangeNotifier {
   /// Name, type, size and version of a Drive file the admin links.
   Future<Map<String, Object?>> documentInfo(String driveFileId) async {
     if (!configured) throw SyncException('Sync is not set up');
+    if (usesFirebase) {
+      throw SyncException(
+        'Download the file from Drive and add it from this device',
+      );
+    }
     final info = await transportFactory(url!)({
       'action': 'documentInfo',
       'token': token,
@@ -360,7 +457,7 @@ class SyncService extends ChangeNotifier {
     final store = documents;
     if (store == null) return;
     for (final row in db.rows(Tables.documents)) {
-      if ((row['drive_file_id'] as String? ?? '').isEmpty) continue;
+      if (!DocumentStore.hasFile(row)) continue;
       if (store.cached(row) == null) await _download(row);
     }
   }
@@ -382,7 +479,9 @@ class SyncService extends ChangeNotifier {
     final store = documents;
     final id = row['id'] as String;
     final driveId = row['drive_file_id'] as String? ?? '';
-    if (store == null || driveId.isEmpty || !configured) return null;
+    final storagePath = row['storage_path'] as String? ?? '';
+    if (store == null || !configured) return null;
+    if (usesFirebase ? storagePath.isEmpty : driveId.isEmpty) return null;
     if (downloads.containsKey(id)) return null;
     downloads[id] = 0;
     downloadErrors.remove(id);
@@ -391,6 +490,17 @@ class SyncService extends ChangeNotifier {
     IOSink? sink;
     try {
       part.parent.createSync(recursive: true);
+      if (usesFirebase) {
+        await _firebase().download(
+          storagePath,
+          part,
+          progress: (p) {
+            downloads[id] = p;
+            notifyListeners();
+          },
+        );
+        return store.finish(row);
+      }
       sink = part.openWrite();
       final transport = transportFactory(url!);
       var offset = 0;
@@ -453,6 +563,30 @@ class SyncService extends ChangeNotifier {
     return failed;
   }
 
+  /// Sends photos taken on this device to Cloud Storage and notes where,
+  /// so the row reaches Firestore with it. Returns the ids of photos that
+  /// could not be sent; their rows wait for the next sync.
+  Future<Set<String>> _uploadPhotosFirebase(
+    FirebaseSync firebase,
+    FirebaseAccount account,
+  ) async {
+    final store = photos;
+    if (store == null || account.readOnly) return const {};
+    final failed = <String>{};
+    for (final r in store.pendingUploads(db)) {
+      final id = r['id'] as String;
+      final path = 'photos/$id.jpg';
+      try {
+        await firebase.upload(path, store.file(id), 'image/jpeg');
+        db.save(Tables.faultPhotos, {'id': id, 'storage_path': path});
+      } catch (e) {
+        failed.add(id);
+        lastError = 'Photo not sent: $e';
+      }
+    }
+    return failed;
+  }
+
   /// The picture of a fault_photos row: the local file, downloaded from
   /// Drive first when it was taken on another device. Null when it cannot
   /// be had now (offline, or not uploaded yet).
@@ -462,6 +596,18 @@ class SyncService extends ChangeNotifier {
     final f = store.file(row['id'] as String);
     if (f.existsSync()) return f;
     final driveId = row['drive_file_id'] as String? ?? '';
+    final storagePath = row['storage_path'] as String? ?? '';
+    if (usesFirebase) {
+      if (storagePath.isEmpty) return null;
+      try {
+        f.parent.createSync(recursive: true);
+        final part = File('${f.path}.download');
+        await _firebase().download(storagePath, part);
+        return part.renameSync(f.path);
+      } catch (_) {
+        return null;
+      }
+    }
     if (driveId.isEmpty || !configured) return null;
     try {
       final answer = await transportFactory(url!)({
