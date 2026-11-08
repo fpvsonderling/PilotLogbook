@@ -1,0 +1,146 @@
+rules_version = '2';
+
+// Pilot Logbook security rules for Cloud Firestore. Every table of
+// app/lib/data/schema.dart is a collection; a document's id is the row id.
+//
+// Who is who: each access key is a Firebase Auth account (email + password
+// packed into the key). members/{uid} says whose key it is:
+//   kind 'master'  the master admin key: changes and deletes everything;
+//   kind 'shared'  the shared pilots' key: only adds rows;
+//   kind 'person'  a person's own key (person_id): valid only while that
+//                  person is active and not deleted in people. Roles come
+//                  from people.roles: 'admin' = every right, 'viewer' = read
+//                  only. Others change only the rows they added.
+// active == false turns a key off. These are the rules Code.gs had for
+// the Google Sheets backend.
+//
+// Kept equal to FIRESTORE_RULES in apps_script/Code.gs by a test.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function doc(collection, id) {
+      return /databases/$(database)/documents/$(collection)/$(id);
+    }
+
+    function str(v) {
+      return v is string ? v : '';
+    }
+
+    // Sheets kept 1/0 as text; the app writes numbers.
+    function isOn(v) {
+      return v == 1 || v == '1' || v == true;
+    }
+
+    function isOff(v) {
+      return v == 0 || v == '0' || v == false;
+    }
+
+    function hasRole(p, role) {
+      return str(p.get('roles', '')).matches('(.*,)?\\s*' + role + '\\s*(,.*)?');
+    }
+
+    // The caller's rights: ok (key valid), admin, viewer and me (people id,
+    // '' for the master and shared keys).
+    function account() {
+      let m = get(doc('members', request.auth.uid)).data;
+      let person = m.kind == 'person';
+      let p = person ? get(doc('people', m.person_id)).data : {};
+      return {
+        'ok': m.active == true
+          && (!person || (!isOn(p.get('deleted', 0)) && !isOff(p.get('active', 1)))),
+        'admin': m.kind == 'master'
+          || (person && hasRole(p, 'admin') && !hasRole(p, 'viewer')),
+        'viewer': person && hasRole(p, 'viewer'),
+        'me': person ? m.person_id : ''
+      };
+    }
+
+    function signedIn() {
+      return request.auth != null
+        && exists(doc('members', request.auth.uid));
+    }
+
+    function valid() {
+      return signedIn() && account().ok;
+    }
+
+    function admin() {
+      return valid() && account().admin;
+    }
+
+    // The app's keys and who they belong to: only the admin.
+    match /members/{uid} {
+      allow get: if request.auth != null
+        && (request.auth.uid == uid || admin());
+      allow list, create, update, delete: if admin();
+    }
+
+    // meta/changes: per table, when it last changed (the app skips tables
+    // that did not). meta/config: settings written by the migration.
+    match /meta/{name} {
+      allow read: if valid();
+      allow create, update: if name == 'changes'
+        && valid() && !account().viewer;
+    }
+
+    match /{table}/{id} {
+      function isTable() {
+        return table in ['people', 'projects', 'aircraft', 'batteries',
+          'mission_types', 'flights', 'checklist_templates', 'checklist_items',
+          'checks', 'check_answers', 'daily_checks_fb3', 'daily_checks_m30t',
+          'faults', 'fault_repairs', 'fault_signoffs', 'fault_photos',
+          'maintenance', 'maintenance_intervals', 'torque_specs',
+          'competencies', 'documents'];
+      }
+
+      // Only the admin adds to, changes or deletes these.
+      function adminOnly() {
+        return table in ['documents', 'maintenance_intervals', 'projects'];
+      }
+
+      // One person's own rows (person_id): only they and the admin.
+      function personal() {
+        return table in ['competencies'];
+      }
+
+      allow get, list: if isTable() && valid()
+        && (!personal() || account().admin
+          || resource.data.get('person_id', '') == account().me);
+
+      allow create: if isTable() && writable(null);
+      allow update: if isTable() && writable(resource.data);
+      // Rows are never removed, only marked deleted.
+      allow delete: if false;
+
+      function writable(old) {
+        let d = request.resource.data;
+        let a = account();
+        return valid() && !a.viewer
+          && d.get('id', '') == id
+          && d.get('server_time', null) == request.time
+          // The newer edit wins: an older one is refused, and the app then
+          // takes the version stored here.
+          && (old == null || str(d.get('updated_at', '')) >= str(old.get('updated_at', '')))
+          && (a.admin || (!adminOnly() && (personal() ? ownPersonal(old, d, a) : ownRow(old, d, a))));
+      }
+
+      // A new row is marked as the caller's and is not deleted; a row is
+      // changed (or deleted) only by the person who added it.
+      function ownRow(old, d, a) {
+        let by = d.get('created_by', null);
+        return old == null
+          ? (by == a.me || (a.me == '' && by == null)) && !isOn(d.get('deleted', 0))
+          : a.me != '' && old.get('created_by', '') == a.me && by == a.me;
+      }
+
+      // Only the person's own rows; only the admin marks one verified.
+      function ownPersonal(old, d, a) {
+        return a.me != ''
+          && d.get('person_id', '') == a.me
+          && (old == null || old.get('person_id', '') == a.me)
+          && !isOn(d.get('verified', 0))
+          && str(d.get('verified_by', '')) == '';
+      }
+    }
+  }
+}

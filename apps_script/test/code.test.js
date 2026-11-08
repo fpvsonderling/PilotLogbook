@@ -64,6 +64,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   // Drive files the documents tests use: id -> { name, mime, bytes, updated }.
   const docs = {};
   const fetches = [];
+  const firebase = { accounts: [], docs: {}, rules: [], files: {}, commits: 0 };
   const spreadsheet = {
     getId: () => 'ss1',
     getName: () => 'Pilot Logbook',
@@ -100,7 +101,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
       getOAuthToken: () => 'oauth',
       deleteTrigger() {},
       newTrigger: () => {
-        const b = { timeBased: () => b, onMonthDay: () => b, atHour: () => b, everyHours: () => b, create: () => b };
+        const b = { timeBased: () => b, onMonthDay: () => b, atHour: () => b, everyHours: () => b, everyDays: () => b, create: () => b };
         return b;
       },
     },
@@ -147,6 +148,41 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
     UrlFetchApp: {
       fetch: (url, opts) => {
         fetches.push({ url, opts });
+        const answer = (code, body) => ({
+          getResponseCode: () => code,
+          getContentText: () => JSON.stringify(body),
+        });
+        if (url.includes('identitytoolkit.googleapis.com')) {
+          const body = JSON.parse(opts.payload);
+          firebase.accounts.push(body);
+          return answer(200, { localId: 'uid-' + firebase.accounts.length, idToken: 't' });
+        }
+        if (url.includes('firestore.googleapis.com') && url.endsWith(':commit')) {
+          JSON.parse(opts.payload).writes.forEach((w) => {
+            const name = w.update.name.split('/documents/')[1];
+            const fields = {};
+            Object.entries(w.update.fields).forEach(([k, v]) => (fields[k] = 'nullValue' in v ? null : v.stringValue ?? v.booleanValue));
+            w.updateTransforms.forEach((t) => (fields[t.fieldPath] = 'NOW'));
+            firebase.docs[name] = w.updateMask ? { ...(firebase.docs[name] || {}), ...fields } : fields;
+          });
+          firebase.commits++;
+          return answer(200, { commitTime: 'now' });
+        }
+        if (url.includes('firestore.googleapis.com')) {
+          const table = url.split('/documents/')[1].split('?')[0];
+          const documents = Object.entries(firebase.docs)
+            .filter(([n]) => n.startsWith(table + '/'))
+            .map(([, f]) => ({ fields: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v === null ? { nullValue: null } : { stringValue: String(v) }])) }));
+          return answer(200, { documents });
+        }
+        if (url.includes('firebaserules.googleapis.com')) {
+          firebase.rules.push({ url, body: JSON.parse(opts.payload) });
+          return answer(200, { name: 'ruleset-' + firebase.rules.length });
+        }
+        if (url.includes('storage.googleapis.com/upload/storage')) {
+          firebase.files[decodeURIComponent(url.split('name=')[1])] = opts.payload;
+          return answer(200, {});
+        }
         if (url.includes('/upload/drive/')) {
           return { getResponseCode: () => 200, getAllHeaders: () => ({ Location: 'https://upload/session-1' }) };
         }
@@ -163,7 +199,7 @@ function load({ standalone = false, fresh = false, serviceUrl = 'https://script.
   const send = (token) => (body) =>
     JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ token, ...body }) } }).text);
   // token-1 is the pilots' link, token-2 the admin link.
-  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), oldSheets, driveFiles, docs, fetches };
+  return { ctx, sheets, props, files, post: send('token-2'), pilot: send('token-1'), send, oldSheets, driveFiles, docs, fetches, firebase };
 }
 
 const flight = (id, updatedAt, extra = {}) => ({
@@ -741,4 +777,90 @@ test('only the admin changes maintenance intervals and projects', () => {
   const iv = { id: 'i1', updated_at: 't1', deleted: 0, model: '', section: 'fts', days: '30' };
   assert.deepStrictEqual(pilot({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).denied.maintenance_intervals, ['i1']);
   assert.strictEqual(post({ action: 'sync', push: { maintenance_intervals: [iv] }, since: {} }).accepted.maintenance_intervals.length, 1);
+});
+
+// ---------------------------------------------------------------- Firebase
+
+test('Firebase rules in Code.gs equal the files in firebase/', () => {
+  const { ctx } = load();
+  for (const [name, file] of [['FIRESTORE_RULES', 'firestore.rules'], ['STORAGE_RULES', 'storage.rules']]) {
+    const inCode = vm.runInContext(name, ctx);
+    assert.strictEqual(inCode, fs.readFileSync(path.join(__dirname, '..', '..', 'firebase', file), 'utf8'));
+  }
+});
+
+test('moveToFirebase needs the project ids first', () => {
+  const { ctx } = load();
+  assert.throws(() => ctx.moveToFirebase(), /FIREBASE_PROJECT_ID/);
+});
+
+test('moveToFirebase copies tables, makes keys and hands them out', () => {
+  const s = load();
+  const { ctx, props, firebase } = s;
+  s.pilot({ action: 'sync', push: { flights: [flight('f1', '2026-10-28T10:00:00.000Z', { notes: 'hello' })] }, since: {} });
+  s.post({
+    action: 'sync',
+    push: {
+      people: [{ id: 'p1', updated_at: '2026-10-28T10:00:00.000Z', deleted: 0, name: 'Anna', roles: 'pilot', active: 1 }],
+      fault_photos: [{ id: 'ph1', updated_at: '2026-10-28T10:00:00.000Z', deleted: 0, fault_id: 'x', drive_file_id: 'drive-ph1' }],
+    },
+    since: {},
+  });
+  const anna = s.post({ action: 'personLink', person_id: 'p1' }).token;
+  props.FIREBASE_PROJECT_ID = 'pl-test';
+  props.FIREBASE_API_KEY = 'api-key';
+
+  const result = ctx.moveToFirebase();
+  assert.strictEqual(result.left, 0);
+  assert.match(result.masterKey, /^PL2-/);
+  assert.deepStrictEqual(
+    Buffer.from(result.masterKey.slice(4), 'base64url').toString().split(' ').slice(0, 2),
+    ['pl-test', 'api-key'],
+  );
+
+  // Rows as text, with the server's time; server_seq is not carried over.
+  const f1 = firebase.docs['flights/f1'];
+  assert.strictEqual(f1.notes, 'hello');
+  assert.strictEqual(f1.deleted, '0');
+  assert.strictEqual(f1.server_time, 'NOW');
+  assert.ok(!('server_seq' in f1));
+  assert.strictEqual(firebase.docs['meta/changes'].flights, 'NOW');
+
+  // One account per key: master, shared and Anna's.
+  const kinds = Object.entries(firebase.docs).filter(([n]) => n.startsWith('members/')).map(([, m]) => m.kind).sort();
+  assert.deepStrictEqual(kinds, ['master', 'person', 'shared']);
+  assert.strictEqual(firebase.accounts.length, 3);
+
+  // The photo went to Storage and its row says where.
+  assert.ok('photos/ph1.jpg' in firebase.files);
+  assert.strictEqual(firebase.docs['fault_photos/ph1'].storage_path, 'photos/ph1.jpg');
+  assert.strictEqual(firebase.docs['meta/config'].bucket, 'pl-test.firebasestorage.app');
+  assert.strictEqual(firebase.rules.filter((r) => r.url.endsWith('/rulesets')).length, 2);
+
+  // Every app now gets its new key; unknown keys an error.
+  const moved = s.send(anna)({ action: 'sync', push: {}, since: {} });
+  assert.strictEqual(moved.ok, false);
+  const member = Object.values(firebase.docs).find((m) => m.kind === 'person');
+  assert.strictEqual(moved.moved_to, member.key);
+  assert.strictEqual(member.person_id, 'p1');
+  assert.ok(s.pilot({ action: 'sync', push: {}, since: {} }).moved_to);
+  assert.ok(!s.send('nope')({ action: 'sync', push: {}, since: {} }).moved_to);
+
+  // Running it again copies nothing twice.
+  const commits = firebase.commits;
+  ctx.moveToFirebase();
+  assert.strictEqual(firebase.accounts.length, 3);
+  assert.ok(firebase.commits - commits <= 1);
+});
+
+test('mirrorFromFirebase writes Firestore back into the tabs', () => {
+  const s = load();
+  s.props.FIREBASE_PROJECT_ID = 'pl-test';
+  s.props.FIREBASE_API_KEY = 'api-key';
+  s.firebase.docs['flights/f9'] = { id: 'f9', notes: 'from firebase', deleted: '0', server_time: '2026-11-08T10:00:00Z' };
+  s.ctx.mirrorFromFirebase();
+  const sheet = s.sheets.flights;
+  const header = sheet.cells[0];
+  assert.strictEqual(sheet.cells[1][header.indexOf('notes')], 'from firebase');
+  assert.strictEqual(sheet.cells[1][header.indexOf('server_seq')], String(Date.parse('2026-11-08T10:00:00Z')));
 });

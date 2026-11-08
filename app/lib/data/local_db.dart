@@ -219,6 +219,12 @@ class LocalDb {
     return r.isEmpty ? 0 : r.first['last_seq'] as int;
   }
 
+  /// Makes the next sync download every table again (a new server).
+  void resetSyncState() => _db.execute('DELETE FROM sync_state');
+
+  /// A new row id.
+  static String newId() => _uuid.v4();
+
   void setLastSeq(TableDef table, int seq) {
     _db.execute(
       'INSERT OR REPLACE INTO sync_state (table_name, last_seq) VALUES (?, ?)',

@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Pilot Logbook files in Cloud Storage for Firebase: fault photos and the
+// documents every pilot needs. Who may do what comes from the same
+// members/{uid} and people documents as firestore.rules.
+//
+// Kept equal to STORAGE_RULES in apps_script/Code.gs by a test.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function member() {
+      return firestore.get(/databases/(default)/documents/members/$(request.auth.uid)).data;
+    }
+
+    function valid() {
+      return request.auth != null && member().active == true;
+    }
+
+    function admin() {
+      let m = member();
+      let roles = m.kind == 'person'
+        ? firestore.get(/databases/(default)/documents/people/$(m.person_id)).data.get('roles', '')
+        : '';
+      return m.kind == 'master' || (roles is string
+        && roles.matches('(.*,)?\\s*admin\\s*(,.*)?')
+        && !roles.matches('(.*,)?\\s*viewer\\s*(,.*)?'));
+    }
+
+    // photos/<fault_photos id>.jpg, added from any device, never replaced.
+    match /photos/{name} {
+      allow read: if valid();
+      allow create: if valid()
+        && request.resource.size < 30 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // documents/<folder>/<file name>: only the admin adds them.
+    match /documents/{folder}/{name} {
+      allow read: if valid();
+      allow create, update, delete: if valid() && admin();
+    }
+  }
+}

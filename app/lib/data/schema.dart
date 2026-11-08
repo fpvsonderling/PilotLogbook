@@ -209,6 +209,8 @@ class Tables {
     Col('repair_id'), // empty for photos of the report
     Col('drive_file_id'),
     Col('url'),
+    // The picture in Cloud Storage for Firebase (photos/<id>.jpg).
+    Col('storage_path'),
   ]);
 
   // Maintenance: one row per maintenance of a drone, one column per
@@ -276,6 +278,8 @@ class Tables {
     Col('size_bytes', ColType.integer),
     // Drive's last change of the file; a new one makes apps download again.
     Col('file_version'),
+    // The file in Cloud Storage for Firebase (documents/<folder>/<name>).
+    Col('storage_path'),
   ]);
 
   static const all = [

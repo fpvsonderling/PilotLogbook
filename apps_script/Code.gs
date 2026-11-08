@@ -37,12 +37,12 @@ const SCHEMA = {
   faults: ['reported_at', 'aircraft_id', 'battery_id', 'equipment', 'severity', 'description', 'discovered_by_id'],
   fault_repairs: ['fault_id', 'started_at', 'finished_at', 'technicians', 'work_performed', 'materials_used', 'notes'],
   fault_signoffs: ['fault_id', 'tested_at', 'result', 'notes', 'signatory_id'],
-  fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url'],
+  fault_photos: ['fault_id', 'repair_id', 'drive_file_id', 'url', 'storage_path'],
   maintenance: ['performed_at', 'aircraft_id', 'technician_id', 'arm_assembly', 'center_plate', 'propulsion_system', 'load_assembly', 'leg_assembly', 'power_system', 'fts', 'notes'],
   maintenance_intervals: ['model', 'section', 'hours', 'flights', 'days'],
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   competencies: ['person_id', 'type', 'number', 'issued_on', 'expires_on', 'url', 'notes', 'verified', 'verified_by'],
-  documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version'],
+  documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version', 'storage_path'],
 };
 // SCHEMA-END
 
@@ -219,6 +219,8 @@ function doGet() {
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
+    const moved = movedAnswer_(req.token);
+    if (moved) return json_(moved);
     const user = user_(req.token);
     if (!user) return json_({ ok: false, error: 'Access key not valid or turned off. Ask the administrator.' });
     if (req.action === 'sync') return json_(sync_(req, user));
@@ -1121,6 +1123,542 @@ function seconds_(takeoff, land) {
   const s = function (c) { const p = c.split(':').map(Number); return p[0] * 3600 + p[1] * 60 + p[2]; };
   const d = s(land) - s(takeoff);
   return d >= 0 ? d : d + 86400;
+}
+
+// --------------------------------------------------------------- Firebase
+
+/**
+ * Moving to Firebase. Paste the two values from the Firebase console
+ * (Project settings > General: "Project ID" and "Web API key"), save, then
+ * run moveToFirebase() and, after it, installFirebaseTriggers().
+ */
+const FIREBASE_PROJECT_ID = '';
+const FIREBASE_API_KEY = '';
+
+// FIRESTORE-RULES-START (kept equal to firebase/firestore.rules by a test)
+const FIRESTORE_RULES = String.raw`rules_version = '2';
+
+// Pilot Logbook security rules for Cloud Firestore. Every table of
+// app/lib/data/schema.dart is a collection; a document's id is the row id.
+//
+// Who is who: each access key is a Firebase Auth account (email + password
+// packed into the key). members/{uid} says whose key it is:
+//   kind 'master'  the master admin key: changes and deletes everything;
+//   kind 'shared'  the shared pilots' key: only adds rows;
+//   kind 'person'  a person's own key (person_id): valid only while that
+//                  person is active and not deleted in people. Roles come
+//                  from people.roles: 'admin' = every right, 'viewer' = read
+//                  only. Others change only the rows they added.
+// active == false turns a key off. These are the rules Code.gs had for
+// the Google Sheets backend.
+//
+// Kept equal to FIRESTORE_RULES in apps_script/Code.gs by a test.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function doc(collection, id) {
+      return /databases/$(database)/documents/$(collection)/$(id);
+    }
+
+    function str(v) {
+      return v is string ? v : '';
+    }
+
+    // Sheets kept 1/0 as text; the app writes numbers.
+    function isOn(v) {
+      return v == 1 || v == '1' || v == true;
+    }
+
+    function isOff(v) {
+      return v == 0 || v == '0' || v == false;
+    }
+
+    function hasRole(p, role) {
+      return str(p.get('roles', '')).matches('(.*,)?\\s*' + role + '\\s*(,.*)?');
+    }
+
+    // The caller's rights: ok (key valid), admin, viewer and me (people id,
+    // '' for the master and shared keys).
+    function account() {
+      let m = get(doc('members', request.auth.uid)).data;
+      let person = m.kind == 'person';
+      let p = person ? get(doc('people', m.person_id)).data : {};
+      return {
+        'ok': m.active == true
+          && (!person || (!isOn(p.get('deleted', 0)) && !isOff(p.get('active', 1)))),
+        'admin': m.kind == 'master'
+          || (person && hasRole(p, 'admin') && !hasRole(p, 'viewer')),
+        'viewer': person && hasRole(p, 'viewer'),
+        'me': person ? m.person_id : ''
+      };
+    }
+
+    function signedIn() {
+      return request.auth != null
+        && exists(doc('members', request.auth.uid));
+    }
+
+    function valid() {
+      return signedIn() && account().ok;
+    }
+
+    function admin() {
+      return valid() && account().admin;
+    }
+
+    // The app's keys and who they belong to: only the admin.
+    match /members/{uid} {
+      allow get: if request.auth != null
+        && (request.auth.uid == uid || admin());
+      allow list, create, update, delete: if admin();
+    }
+
+    // meta/changes: per table, when it last changed (the app skips tables
+    // that did not). meta/config: settings written by the migration.
+    match /meta/{name} {
+      allow read: if valid();
+      allow create, update: if name == 'changes'
+        && valid() && !account().viewer;
+    }
+
+    match /{table}/{id} {
+      function isTable() {
+        return table in ['people', 'projects', 'aircraft', 'batteries',
+          'mission_types', 'flights', 'checklist_templates', 'checklist_items',
+          'checks', 'check_answers', 'daily_checks_fb3', 'daily_checks_m30t',
+          'faults', 'fault_repairs', 'fault_signoffs', 'fault_photos',
+          'maintenance', 'maintenance_intervals', 'torque_specs',
+          'competencies', 'documents'];
+      }
+
+      // Only the admin adds to, changes or deletes these.
+      function adminOnly() {
+        return table in ['documents', 'maintenance_intervals', 'projects'];
+      }
+
+      // One person's own rows (person_id): only they and the admin.
+      function personal() {
+        return table in ['competencies'];
+      }
+
+      allow get, list: if isTable() && valid()
+        && (!personal() || account().admin
+          || resource.data.get('person_id', '') == account().me);
+
+      allow create: if isTable() && writable(null);
+      allow update: if isTable() && writable(resource.data);
+      // Rows are never removed, only marked deleted.
+      allow delete: if false;
+
+      function writable(old) {
+        let d = request.resource.data;
+        let a = account();
+        return valid() && !a.viewer
+          && d.get('id', '') == id
+          && d.get('server_time', null) == request.time
+          // The newer edit wins: an older one is refused, and the app then
+          // takes the version stored here.
+          && (old == null || str(d.get('updated_at', '')) >= str(old.get('updated_at', '')))
+          && (a.admin || (!adminOnly() && (personal() ? ownPersonal(old, d, a) : ownRow(old, d, a))));
+      }
+
+      // A new row is marked as the caller's and is not deleted; a row is
+      // changed (or deleted) only by the person who added it.
+      function ownRow(old, d, a) {
+        let by = d.get('created_by', null);
+        return old == null
+          ? (by == a.me || (a.me == '' && by == null)) && !isOn(d.get('deleted', 0))
+          : a.me != '' && old.get('created_by', '') == a.me && by == a.me;
+      }
+
+      // Only the person's own rows; only the admin marks one verified.
+      function ownPersonal(old, d, a) {
+        return a.me != ''
+          && d.get('person_id', '') == a.me
+          && (old == null || old.get('person_id', '') == a.me)
+          && !isOn(d.get('verified', 0))
+          && str(d.get('verified_by', '')) == '';
+      }
+    }
+  }
+}
+`;
+// FIRESTORE-RULES-END
+
+// STORAGE-RULES-START (kept equal to firebase/storage.rules by a test)
+const STORAGE_RULES = String.raw`rules_version = '2';
+
+// Pilot Logbook files in Cloud Storage for Firebase: fault photos and the
+// documents every pilot needs. Who may do what comes from the same
+// members/{uid} and people documents as firestore.rules.
+//
+// Kept equal to STORAGE_RULES in apps_script/Code.gs by a test.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function member() {
+      return firestore.get(/databases/(default)/documents/members/$(request.auth.uid)).data;
+    }
+
+    function valid() {
+      return request.auth != null && member().active == true;
+    }
+
+    function admin() {
+      let m = member();
+      let roles = m.kind == 'person'
+        ? firestore.get(/databases/(default)/documents/people/$(m.person_id)).data.get('roles', '')
+        : '';
+      return m.kind == 'master' || (roles is string
+        && roles.matches('(.*,)?\\s*admin\\s*(,.*)?')
+        && !roles.matches('(.*,)?\\s*viewer\\s*(,.*)?'));
+    }
+
+    // photos/<fault_photos id>.jpg, added from any device, never replaced.
+    match /photos/{name} {
+      allow read: if valid();
+      allow create: if valid()
+        && request.resource.size < 30 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // documents/<folder>/<file name>: only the admin adds them.
+    match /documents/{folder}/{name} {
+      allow read: if valid();
+      allow create, update, delete: if valid() && admin();
+    }
+  }
+}
+`;
+// STORAGE-RULES-END
+
+/**
+ * Run once (again when it says so): moves everything to Firebase.
+ *  1. Publishes the security rules.
+ *  2. Stops syncing with this spreadsheet; from now on every app that
+ *     syncs here gets its new Firebase access key instead, and syncs there.
+ *  3. Makes a Firebase key for every access key (master admin, shared
+ *     pilots' key, each person's own key).
+ *  4. Copies every tab to Firestore.
+ *  5. Copies fault photos and document files from Drive to Firebase
+ *     Storage; when this takes long it stops and asks to be run again.
+ * The spreadsheet itself is only read, and kept as it is.
+ */
+function moveToFirebase() {
+  const fb = firebaseConfig_();
+  const props = PropertiesService.getScriptProperties();
+  const started = Date.now();
+  const done = [];
+
+  try {
+    deployRules_(fb, 'cloud.firestore', 'firestore.rules', FIRESTORE_RULES);
+    done.push('Firestore rules published');
+  } catch (err) {
+    done.push('Firestore rules NOT published (' + err + '): paste firebase/firestore.rules in Firestore > Rules');
+  }
+
+  props.setProperty('FIREBASE_MOVED', '1');
+
+  if (!props.getProperty('FIREBASE_KEYS')) {
+    props.setProperty('FIREBASE_KEYS', JSON.stringify(makeFirebaseKeys_(fb)));
+    done.push('access keys made');
+  }
+
+  if (props.getProperty('FIREBASE_TABLES_DONE') !== '1') {
+    const counts = copyTablesToFirestore_(fb);
+    props.setProperty('FIREBASE_TABLES_DONE', '1');
+    done.push('tables copied: ' + Object.keys(counts).map(function (t) { return t + ' ' + counts[t]; }).join(', '));
+  }
+
+  let files;
+  try {
+    deployRules_(fb, 'firebase.storage/' + fb.bucket, 'storage.rules', STORAGE_RULES);
+    files = copyFilesToStorage_(fb, started);
+    done.push('files copied: ' + files.copied + (files.failed.length ? ', not copied: ' + files.failed.join('; ') : ''));
+  } catch (err) {
+    files = { left: 0 };
+    done.push('files NOT copied (' + err + '): is Storage turned on in Firebase (Blaze plan)?');
+  }
+
+  const keys = JSON.parse(props.getProperty('FIREBASE_KEYS'));
+  const master = keys[props.getProperty('ADMIN_TOKEN')];
+  Logger.log(done.join('\n'));
+  if (files.left) {
+    Logger.log('NOT DONE YET: ' + files.left + ' files left. Run moveToFirebase again.');
+  } else {
+    Logger.log('DONE. Every app switches to Firebase by itself on its next sync.\nMaster admin key (only for you):\n' + master);
+  }
+  return { done: done, left: files.left, masterKey: master };
+}
+
+/** The project's ids; stops with a message while they are not filled in. */
+function firebaseConfig_() {
+  const props = PropertiesService.getScriptProperties();
+  const project = FIREBASE_PROJECT_ID || props.getProperty('FIREBASE_PROJECT_ID') || '';
+  const apiKey = FIREBASE_API_KEY || props.getProperty('FIREBASE_API_KEY') || '';
+  if (!project || !apiKey) {
+    throw new Error('Fill in FIREBASE_PROJECT_ID and FIREBASE_API_KEY at the Firebase section of Code.gs first');
+  }
+  return {
+    project: project,
+    apiKey: apiKey,
+    bucket: props.getProperty('FIREBASE_BUCKET') || project + '.firebasestorage.app',
+    docs: 'projects/' + project + '/databases/(default)/documents',
+  };
+}
+
+/** A Google API call as the script's owner (who owns the Firebase project). */
+function googleApi_(fb, method, url, body, contentType) {
+  const opts = {
+    method: method,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Goog-User-Project': fb.project },
+    muteHttpExceptions: true,
+  };
+  if (body !== undefined) {
+    opts.contentType = contentType || 'application/json';
+    opts.payload = contentType ? body : JSON.stringify(body);
+  }
+  const res = UrlFetchApp.fetch(url, opts);
+  const code = res.getResponseCode();
+  const text = res.getContentText();
+  if (code < 200 || code >= 300) throw new Error(method + ' ' + url.split('?')[0] + ': ' + code + ' ' + text.slice(0, 300));
+  return text ? JSON.parse(text) : {};
+}
+
+function deployRules_(fb, release, fileName, source) {
+  const base = 'https://firebaserules.googleapis.com/v1/projects/' + fb.project;
+  const ruleset = googleApi_(fb, 'post', base + '/rulesets', { source: { files: [{ name: fileName, content: source }] } });
+  const name = 'projects/' + fb.project + '/releases/' + release;
+  try {
+    googleApi_(fb, 'patch', base + '/releases/' + release, { release: { name: name, rulesetName: ruleset.name } });
+  } catch (err) {
+    googleApi_(fb, 'post', base + '/releases', { name: name, rulesetName: ruleset.name });
+  }
+}
+
+/** Writes in pieces of at most 400 (Firestore takes 500 per commit). */
+function commitAll_(fb, writes) {
+  for (let i = 0; i < writes.length; i += 400) {
+    googleApi_(fb, 'post', 'https://firestore.googleapis.com/v1/' + fb.docs + ':commit', { writes: writes.slice(i, i + 400) });
+  }
+}
+
+/** A write replacing a document, with server_time set by Firestore. */
+function firestoreUpsert_(fb, path, fields, stampField) {
+  const out = {};
+  Object.keys(fields).forEach(function (k) { out[k] = firestoreValue_(fields[k]); });
+  return {
+    update: { name: fb.docs + '/' + path, fields: out },
+    updateTransforms: [{ fieldPath: stampField || 'server_time', setToServerValue: 'REQUEST_TIME' }],
+  };
+}
+
+/** A write that only marks tables changed in meta/changes. */
+function firestoreStamp_(fb, tables) {
+  return {
+    update: { name: fb.docs + '/meta/changes', fields: {} },
+    updateMask: { fieldPaths: [] },
+    updateTransforms: tables.map(function (t) { return { fieldPath: t, setToServerValue: 'REQUEST_TIME' }; }),
+  };
+}
+
+function firestoreValue_(v) {
+  if (v === null || v === undefined || v === '') return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  return { stringValue: String(v) };
+}
+
+/** Every tab's rows as Firestore documents, text as in the sheet. */
+function copyTablesToFirestore_(fb) {
+  const counts = {};
+  Object.keys(SCHEMA).forEach(function (table) {
+    const sheet = ensureSheet_(table, false);
+    const writes = [];
+    if (sheet.getLastRow() > 1) {
+      const header = readHeader_(sheet);
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues().forEach(function (r) {
+        const row = toObject_(header, r);
+        if (!row.id || row.id.indexOf('/') >= 0) return;
+        delete row.server_seq;
+        writes.push(firestoreUpsert_(fb, table + '/' + row.id, row));
+      });
+    }
+    counts[table] = writes.length;
+    writes.push(firestoreStamp_(fb, [table]));
+    commitAll_(fb, writes);
+  });
+  return counts;
+}
+
+/** A random text of [n] letters and digits. */
+function randomText_(n) {
+  let s = '';
+  while (s.length < n) s += Utilities.getUuid().replace(/-/g, '');
+  return s.slice(0, n);
+}
+
+/** The access key text for a Firebase account, as FirebaseKey in the app. */
+function firebaseKey_(fb, id, secret) {
+  return 'PL2-' + Utilities.base64EncodeWebSafe([fb.project, fb.apiKey, id, secret].join(' '), Utilities.Charset.UTF_8).replace(/=+$/, '');
+}
+
+/** A new Firebase Auth account and its members document; returns the key. */
+function newFirebaseKey_(fb, member) {
+  const id = randomText_(12);
+  const secret = randomText_(24);
+  const res = UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + fb.apiKey, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ email: 'key-' + id + '@pilotlogbook.app', password: secret, returnSecureToken: true }),
+    muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() !== 200) {
+    throw new Error('Firebase Authentication refused a new key (' + res.getContentText().slice(0, 200) + '). Is Email/Password sign-in turned on?');
+  }
+  const uid = JSON.parse(res.getContentText()).localId;
+  const key = firebaseKey_(fb, id, secret);
+  const fields = { uid: uid, key: key };
+  Object.keys(member).forEach(function (k) { fields[k] = member[k]; });
+  commitAll_(fb, [firestoreUpsert_(fb, 'members/' + uid, fields, 'created_at')]);
+  return key;
+}
+
+/** A Firebase key for every key of this script: old token -> new key. */
+function makeFirebaseKeys_(fb) {
+  const props = PropertiesService.getScriptProperties();
+  const keys = {};
+  const admin = props.getProperty('ADMIN_TOKEN');
+  if (admin) keys[admin] = newFirebaseKey_(fb, { kind: 'master', active: true });
+  const shared = props.getProperty('API_TOKEN');
+  if (shared) keys[shared] = newFirebaseKey_(fb, { kind: 'shared', active: props.getProperty('SHARED_KEY_OFF') !== '1' });
+  const people = personTokens_();
+  Object.keys(people).forEach(function (token) {
+    keys[token] = newFirebaseKey_(fb, { kind: 'person', person_id: people[token], active: true });
+  });
+  return keys;
+}
+
+/**
+ * Copies fault photos and document files from Drive to Firebase Storage
+ * and notes where in their rows. Stops after about 4.5 minutes (Apps Script
+ * allows 6), returning how many are left.
+ */
+function copyFilesToStorage_(fb, started) {
+  const props = PropertiesService.getScriptProperties();
+  const doneIds = JSON.parse(props.getProperty('FIREBASE_FILES_DONE') || '{}');
+  const todo = [];
+  ['fault_photos', 'documents'].forEach(function (table) {
+    const sheet = ensureSheet_(table, false);
+    if (sheet.getLastRow() < 2) return;
+    const header = readHeader_(sheet);
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues().forEach(function (r) {
+      const row = toObject_(header, r);
+      if (row.drive_file_id && row.deleted !== '1' && !doneIds[row.id]) todo.push({ table: table, row: row });
+    });
+  });
+  let copied = 0;
+  const failed = [];
+  for (let i = 0; i < todo.length; i++) {
+    if (Date.now() - started > 270000) {
+      props.setProperty('FIREBASE_FILES_DONE', JSON.stringify(doneIds));
+      return { copied: copied, failed: failed, left: todo.length - i };
+    }
+    const t = todo[i];
+    try {
+      const file = DriveApp.getFileById(t.row.drive_file_id);
+      const blob = t.table === 'documents' && isGoogleFile_(file) ? file.getAs('application/pdf') : file.getBlob();
+      const name = t.table === 'fault_photos'
+        ? 'photos/' + t.row.id + '.jpg'
+        : 'documents/' + t.row.id + '/' + (t.row.file_name || file.getName()).replace(/[\/\\]/g, '_');
+      googleApi_(fb, 'post', 'https://storage.googleapis.com/upload/storage/v1/b/' + encodeURIComponent(fb.bucket) +
+        '/o?uploadType=media&name=' + encodeURIComponent(name), blob.getBytes(), blob.getContentType() || 'application/octet-stream');
+      const row = {};
+      Object.keys(t.row).forEach(function (k) { row[k] = t.row[k]; });
+      delete row.server_seq;
+      row.storage_path = name;
+      row.updated_at = new Date().toISOString();
+      commitAll_(fb, [firestoreUpsert_(fb, t.table + '/' + row.id, row), firestoreStamp_(fb, [t.table])]);
+      copied++;
+    } catch (err) {
+      failed.push(t.table + ' ' + t.row.id + ': ' + String(err).slice(0, 120));
+    }
+    doneIds[t.row.id] = true;
+  }
+  props.setProperty('FIREBASE_FILES_DONE', JSON.stringify(doneIds));
+  commitAll_(fb, [firestoreUpsert_(fb, 'meta/config', { bucket: fb.bucket }, 'updated_at')]);
+  return { copied: copied, failed: failed, left: 0 };
+}
+
+/**
+ * After the move, what this script answers every app: its new key (the
+ * app then syncs with Firebase), or, for an unknown key, an error.
+ * Null while the data is still here.
+ */
+function movedAnswer_(token) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('FIREBASE_MOVED') !== '1') return null;
+  const keys = JSON.parse(props.getProperty('FIREBASE_KEYS') || '{}');
+  const key = typeof token === 'string' ? keys[token] : null;
+  if (key) return { ok: false, moved_to: key, error: 'Pilot Logbook moved to Firebase. Update the app.' };
+  return { ok: false, error: 'Pilot Logbook is moving to Firebase. Try again in a few minutes, or ask the administrator for a new access key.' };
+}
+
+/**
+ * Daily: copies every Firestore collection back into its tab, so this
+ * spreadsheet stays a readable copy of the data and monthlyBackup() keeps
+ * saving it. The app never writes here any more.
+ */
+function mirrorFromFirebase() {
+  const fb = firebaseConfig_();
+  Object.keys(SCHEMA).forEach(function (table) {
+    const rows = [];
+    let pageToken = '';
+    do {
+      const page = googleApi_(fb, 'get', 'https://firestore.googleapis.com/v1/' + fb.docs + '/' + table +
+        '?pageSize=300' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''));
+      (page.documents || []).forEach(function (d) { rows.push(plainFields_(d.fields || {})); });
+      pageToken = page.nextPageToken || '';
+    } while (pageToken);
+    const sheet = ensureSheet_(table, false);
+    const header = readHeader_(sheet);
+    const values = rows.map(function (r) {
+      return header.map(function (name) {
+        if (name === 'server_seq') return r.server_time ? String(Date.parse(r.server_time)) : '';
+        const v = r[name];
+        return v === null || v === undefined ? '' : String(v);
+      });
+    });
+    if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).clearContent();
+    if (values.length) {
+      const range = sheet.getRange(2, 1, values.length, header.length);
+      range.setNumberFormat('@');
+      range.setValues(values);
+    }
+  });
+}
+
+function plainFields_(fields) {
+  const out = {};
+  Object.keys(fields).forEach(function (k) {
+    const v = fields[k];
+    if ('stringValue' in v) out[k] = v.stringValue;
+    else if ('integerValue' in v) out[k] = String(v.integerValue);
+    else if ('doubleValue' in v) out[k] = String(v.doubleValue);
+    else if ('booleanValue' in v) out[k] = v.booleanValue ? '1' : '0';
+    else if ('timestampValue' in v) out[k] = v.timestampValue;
+    else out[k] = '';
+  });
+  return out;
+}
+
+/** After moveToFirebase: the daily copy back into this spreadsheet. */
+function installFirebaseTriggers() {
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) {
+      return ['mirrorFromFirebase', 'refreshDocuments'].indexOf(t.getHandlerFunction()) >= 0;
+    })
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('mirrorFromFirebase').timeBased().everyDays(1).atHour(2).create();
 }
 
 // ----------------------------------------------------------------- backup

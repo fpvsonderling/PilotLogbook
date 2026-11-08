@@ -43,7 +43,7 @@ class DocumentsPage extends StatelessWidget {
             );
             final withFile = [
               for (final r in rows)
-                if ((r['drive_file_id'] as String? ?? '').isNotEmpty) r,
+                if (DocumentStore.hasFile(r)) r,
             ];
             final offline = store == null
                 ? 0
@@ -107,7 +107,7 @@ class _DocumentTile extends StatelessWidget {
       return Icons.table_chart;
     }
     if (mime.startsWith('video/')) return Icons.movie;
-    if ((row['drive_file_id'] as String? ?? '').isEmpty) return Icons.link;
+    if (!DocumentStore.hasFile(row)) return Icons.link;
     return Icons.description;
   }
 
@@ -117,7 +117,7 @@ class _DocumentTile extends StatelessWidget {
     final sync = services.sync;
     final id = row['id'] as String;
     final progress = sync.downloads[id];
-    final hasFile = (row['drive_file_id'] as String? ?? '').isNotEmpty;
+    final hasFile = DocumentStore.hasFile(row);
     final cached = sync.documents?.cached(row) != null;
     final oldCopy = !cached && (sync.documents?.hasAnyCopy(row) ?? false);
     final notes = (row['notes'] as String? ?? '').trim();
@@ -207,7 +207,7 @@ class _DocumentTile extends StatelessWidget {
   Future<void> _open(BuildContext context) async {
     final sync = Services.of(context).sync;
     final messenger = ScaffoldMessenger.of(context);
-    final hasFile = (row['drive_file_id'] as String? ?? '').isNotEmpty;
+    final hasFile = DocumentStore.hasFile(row);
     final link = (row['url'] as String? ?? '').trim();
     if (!hasFile) {
       if (link.isEmpty) return;
@@ -412,27 +412,28 @@ class _DocumentFormState extends State<_DocumentForm> {
                 ),
                 const SizedBox(height: 8),
               ],
-              SegmentedButton<_Source>(
-                segments: const [
-                  ButtonSegment(
-                    value: _Source.device,
-                    icon: Icon(Icons.upload_file),
-                    label: Text('From this device'),
-                  ),
-                  ButtonSegment(
-                    value: _Source.drive,
-                    icon: Icon(Icons.add_to_drive),
-                    label: Text('Google Drive link'),
-                  ),
-                ],
-                selected: {_source},
-                onSelectionChanged: _busy
-                    ? null
-                    : (s) => setState(() {
-                        _source = s.first;
-                        _error = null;
-                      }),
-              ),
+              if (!Services.of(context).sync.usesFirebase)
+                SegmentedButton<_Source>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _Source.device,
+                      icon: Icon(Icons.upload_file),
+                      label: Text('From this device'),
+                    ),
+                    ButtonSegment(
+                      value: _Source.drive,
+                      icon: Icon(Icons.add_to_drive),
+                      label: Text('Google Drive link'),
+                    ),
+                  ],
+                  selected: {_source},
+                  onSelectionChanged: _busy
+                      ? null
+                      : (s) => setState(() {
+                          _source = s.first;
+                          _error = null;
+                        }),
+                ),
               const SizedBox(height: 12),
               if (_source == _Source.device)
                 OutlinedButton.icon(
