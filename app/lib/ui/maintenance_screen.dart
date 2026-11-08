@@ -12,24 +12,35 @@ Future<void> openMaintenance(
   BuildContext context, {
   Maintenance? maintenance,
   String? aircraftId,
+  String? batteryId,
 }) => Navigator.of(context).push(
   MaterialPageRoute(
-    builder: (_) =>
-        MaintenanceScreen(maintenance: maintenance, aircraftId: aircraftId),
+    builder: (_) => MaintenanceScreen(
+      maintenance: maintenance,
+      aircraftId: aircraftId,
+      batteryId: batteryId,
+    ),
   ),
 );
 
 const _lastTechnicianKey = 'maintenance_last_technician_id';
 
 /// One maintenance: pick the drone and technician, then mark each assembly
-/// Checked or write what was done.
+/// Checked or write what was done. A battery set has only the Power System:
+/// batteries go from drone to drone, so they are kept per set.
 class MaintenanceScreen extends StatefulWidget {
-  const MaintenanceScreen({super.key, this.maintenance, this.aircraftId});
+  const MaintenanceScreen({
+    super.key,
+    this.maintenance,
+    this.aircraftId,
+    this.batteryId,
+  });
 
   final Maintenance? maintenance;
 
-  /// Drone to start with, for a new maintenance.
+  /// Drone or battery set to start with, for a new maintenance.
   final String? aircraftId;
+  final String? batteryId;
 
   @override
   State<MaintenanceScreen> createState() => _MaintenanceScreenState();
@@ -39,6 +50,10 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   static final _stamp = DateFormat('yyyy-MM-dd HH:mm:ss');
 
   String? _aircraftId;
+  String? _batteryId;
+
+  /// Maintenance of a battery set rather than a drone.
+  late bool _battery;
   String? _technicianId;
   late DateTime _performedAt;
   final _checked = <String>{};
@@ -53,7 +68,9 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     super.initState();
     final m = widget.maintenance;
     _performedAt = DateTime.tryParse(m?.performedAt ?? '') ?? DateTime.now();
-    _aircraftId = m?.aircraftId ?? widget.aircraftId;
+    _batteryId = m == null ? widget.batteryId : m.batteryId;
+    _battery = _batteryId != null;
+    _aircraftId = _battery ? null : m?.aircraftId ?? widget.aircraftId;
     _technicianId = m?.row['technician_id'] as String?;
     if ((_technicianId ?? '').isEmpty) _technicianId = null;
     for (final s in maintenanceSections) {
@@ -92,8 +109,22 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     return _checked.contains(s.column) ? checkedValue : '';
   }
 
-  int get _done =>
-      maintenanceSections.where((s) => _value(s).isNotEmpty).length;
+  /// The assemblies on the form. A drone row from before battery sets that
+  /// has a Power System keeps showing it, so it is not lost on save.
+  List<MaintenanceSection> get _sections {
+    if (_battery) return batterySections;
+    final old = widget.maintenance;
+    final keepPower =
+        old != null &&
+        !old.isBattery &&
+        old.value(batterySections.first).isNotEmpty;
+    return [
+      for (final s in maintenanceSections)
+        if (s.column != powerSystem || keepPower) s,
+    ];
+  }
+
+  int get _done => _sections.where((s) => _value(s).isNotEmpty).length;
 
   Future<void> _pickDate() async {
     final d = await showDatePicker(
@@ -121,12 +152,15 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
 
   void _save() {
     final services = Services.of(context);
+    final sections = _sections.map((s) => s.column).toSet();
     services.db.save(Tables.maintenance, {
       if (widget.maintenance != null) 'id': widget.maintenance!.id,
       'performed_at': _stamp.format(_performedAt),
-      'aircraft_id': _aircraftId,
+      'aircraft_id': _battery ? null : _aircraftId,
+      'battery_id': _battery ? _batteryId : null,
       'technician_id': _technicianId,
-      for (final s in maintenanceSections) s.column: _value(s),
+      for (final s in maintenanceSections)
+        s.column: sections.contains(s.column) ? _value(s) : '',
       'notes': _notes.text.trim(),
     });
     services.db.setSetting(_lastTechnicianKey, _technicianId);
@@ -179,17 +213,34 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         ...technicians,
       };
     }
+    final batteries = logbook.names(Tables.batteries, activeOnly: true);
+    final allBatteries = logbook.names(Tables.batteries);
     final droneName = _aircraftId == null ? null : allDrones[_aircraftId];
+    final batteryName = _batteryId == null ? null : allBatteries[_batteryId];
+    final unitId = _battery ? _batteryId : _aircraftId;
+    final sections = _sections;
     final done = _done;
-    final total = maintenanceSections.length;
-    final ready = _aircraftId != null && _technicianId != null && done > 0;
+    final total = sections.length;
+    final ready = unitId != null && _technicianId != null && done > 0;
+    final title = _battery
+        ? batteryName == null
+              ? 'Maintenance · battery set'
+              : 'Maintenance · battery set $batteryName'
+        : droneName == null
+        ? 'Maintenance'
+        : 'Maintenance · drone $droneName';
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          droneName == null ? 'Maintenance' : 'Maintenance · drone $droneName',
-        ),
+        title: Text(title),
         actions: [
+          // Also up here: on a phone the keyboard hides the bottom button.
+          IconButton(
+            key: const Key('save-maintenance-top'),
+            tooltip: 'Save',
+            onPressed: ready ? _save : null,
+            icon: const Icon(Icons.check),
+          ),
           if (widget.maintenance != null &&
               services.canChange(widget.maintenance!.row))
             IconButton(
@@ -236,17 +287,61 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                 onSelected: (id) => setState(() => _technicianId = id),
               ),
               const SizedBox(height: 14),
-              const _Label('Drone'),
-              _Chips(
-                options: {
-                  if (_aircraftId != null && !drones.containsKey(_aircraftId))
-                    _aircraftId!: droneName ?? '?',
-                  ...drones,
-                },
-                selected: _aircraftId,
-                empty: 'Add drones under Reference data',
-                onSelected: (id) => setState(() => _aircraftId = id),
-              ),
+              if (widget.maintenance == null) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: SegmentedButton<bool>(
+                    key: const Key('maintenance-kind'),
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Drone'),
+                        icon: Icon(Icons.flight),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Battery set'),
+                        icon: Icon(Icons.battery_full),
+                      ),
+                    ],
+                    selected: {_battery},
+                    onSelectionChanged: (v) => setState(() {
+                      _battery = v.first;
+                      _checked.clear();
+                      for (final c in _work.values) {
+                        c.clear();
+                      }
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+              if (_battery) ...[
+                const _Label('Battery set'),
+                _Chips(
+                  options: {
+                    if (_batteryId != null &&
+                        !batteries.containsKey(_batteryId))
+                      _batteryId!: batteryName ?? '?',
+                    ...batteries,
+                  },
+                  selected: _batteryId,
+                  empty: 'Add batteries under Reference data',
+                  onSelected: (id) => setState(() => _batteryId = id),
+                ),
+              ] else ...[
+                const _Label('Drone'),
+                _Chips(
+                  options: {
+                    if (_aircraftId != null && !drones.containsKey(_aircraftId))
+                      _aircraftId!: droneName ?? '?',
+                    ...drones,
+                  },
+                  selected: _aircraftId,
+                  empty: 'Add drones under Reference data',
+                  onSelected: (id) => setState(() => _aircraftId = id),
+                ),
+              ],
               const SizedBox(height: 18),
               Row(
                 children: [
@@ -259,7 +354,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                   TextButton.icon(
                     key: const Key('all-checked'),
                     onPressed: () => setState(() {
-                      for (final s in maintenanceSections) {
+                      for (final s in sections) {
                         _checked.add(s.column);
                       }
                     }),
@@ -269,7 +364,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              for (final s in maintenanceSections) ...[
+              for (final s in sections) ...[
                 _SectionCard(
                   key: ValueKey(s.column),
                   section: s,
@@ -326,8 +421,10 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                               ? 'Save'
                               : _technicianId == null
                               ? 'Pick the technician'
-                              : _aircraftId == null
-                              ? 'Pick the drone'
+                              : unitId == null
+                              ? _battery
+                                    ? 'Pick the battery set'
+                                    : 'Pick the drone'
                               : 'Mark at least one assembly',
                           style: const TextStyle(fontSize: 18),
                         ),

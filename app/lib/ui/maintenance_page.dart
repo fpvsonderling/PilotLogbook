@@ -23,6 +23,7 @@ class _MaintenancePageState extends State<MaintenancePage> {
 
   static final _fields = <FilterField<Maintenance>>[
     FilterField('drone', 'Drone', (m) => [m.aircraftId]),
+    FilterField('battery', 'Battery set', (m) => [m.batteryId]),
     FilterField(
       'technician',
       'Technician',
@@ -32,10 +33,12 @@ class _MaintenancePageState extends State<MaintenancePage> {
 
   static List<TableColumn<Maintenance>> _columns(
     Map<String, String> aircraft,
+    Map<String, String> batteries,
     Map<String, String> people,
   ) => [
     TableColumn('Date', 95, (m) => m.performedAt),
     TableColumn('Drone', 45, (m) => aircraft[m.aircraftId] ?? ''),
+    TableColumn('Battery set', 45, (m) => batteries[m.batteryId] ?? ''),
     TableColumn('Technician', 100, (m) => people[m.row['technician_id']] ?? ''),
     for (final s in maintenanceSections)
       TableColumn(s.title, s.column == 'fts' ? 50 : 90, (m) => m.value(s)),
@@ -59,11 +62,36 @@ class _MaintenancePageState extends State<MaintenancePage> {
           final logbook = services.logbook;
           final all = log.all();
           final drones = log.drones();
+          final sets = log.batterySets();
           final aircraft = logbook.names(Tables.aircraft);
+          final batteries = logbook.names(Tables.batteries);
           final people = logbook.names(Tables.people);
           final theme = Theme.of(context);
-          final columns = _columns(aircraft, people);
-          final labels = {'drone': aircraft, 'technician': people};
+          final columns = _columns(aircraft, batteries, people);
+          final labels = {
+            'drone': aircraft,
+            'battery': batteries,
+            'technician': people,
+          };
+          Widget tiles(List<DroneMaintenance> units) => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: LayoutBuilder(
+              builder: (context, box) {
+                // At least two tiles per row, at most 180 wide.
+                const gap = 8.0;
+                final width = ((box.maxWidth - gap) / 2)
+                    .clamp(0.0, 180.0)
+                    .toDouble();
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final d in units) _DroneCard(drone: d, width: width),
+                  ],
+                );
+              },
+            ),
+          );
           final rows = _filter.apply(
             all,
             date: (m) => m.performedAt,
@@ -87,27 +115,30 @@ class _MaintenancePageState extends State<MaintenancePage> {
                         padding: EdgeInsets.symmetric(horizontal: 16),
                         child: Text('Add drones under Reference data'),
                       )
-                    : Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: LayoutBuilder(
-                          builder: (context, box) {
-                            // At least two tiles per row, at most 180 wide.
-                            const gap = 8.0;
-                            final width = ((box.maxWidth - gap) / 2)
-                                .clamp(0.0, 180.0)
-                                .toDouble();
-                            return Wrap(
-                              spacing: gap,
-                              runSpacing: gap,
-                              children: [
-                                for (final d in drones)
-                                  _DroneCard(drone: d, width: width),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
+                    : tiles(drones),
               ),
+              if (sets.isNotEmpty) ...[
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 2),
+                    child: Text(
+                      'Battery sets · Power System',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Text(
+                      'Counted per set from the flights flown with it, '
+                      'on any drone.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(child: tiles(sets)),
+              ],
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -161,7 +192,9 @@ class _MaintenancePageState extends State<MaintenancePage> {
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (context, i) => _MaintenanceCard(
                       maintenance: rows[i],
-                      drone: aircraft[rows[i].aircraftId] ?? '?',
+                      title: rows[i].isBattery
+                          ? 'Battery set ${batteries[rows[i].batteryId] ?? '?'}'
+                          : 'Drone ${aircraft[rows[i].aircraftId] ?? '?'}',
                       technician: people[rows[i].row['technician_id']] ?? '',
                     ),
                   ),
@@ -195,10 +228,21 @@ class _DroneCard extends StatelessWidget {
     final urgency = urgencyOf(drone.level);
     final (fg, bg) = urgencyColors(context, urgency);
     final due = drone.due;
+    // The numbers follow the assembly closest to due: a maintenance that
+    // did only one assembly does not reset the others.
+    final next = drone.next;
+    final seconds = next?.secondsSince ?? drone.secondsSince;
+    final flights = next?.flightsSince ?? drone.flightsSince;
+    final from = next == null ? last?.performedAt : next.lastAt;
+    final dueOn = _earliestDueOn(drone);
     return SizedBox(
       width: width,
       child: Card(
-        key: Key('drone-card-${drone.name}'),
+        key: Key(
+          drone.battery
+              ? 'battery-card-${drone.name}'
+              : 'drone-card-${drone.name}',
+        ),
         color: bg,
         shape: fg == null
             ? null
@@ -215,7 +259,7 @@ class _DroneCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Drone ${drone.name}',
+                  drone.title,
                   style: theme.textTheme.titleSmall,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -228,17 +272,23 @@ class _DroneCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${formatHours(drone.secondsSince)} h',
+                  '${formatHours(seconds)} h',
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 Text(
-                  '${drone.flightsSince} '
-                  '${drone.flightsSince == 1 ? 'flight' : 'flights'}'
-                  '${last == null ? ' in total' : ' since'}',
+                  '$flights ${flights == 1 ? 'flight' : 'flights'}'
+                  '${from == null ? ' in total' : ' since ${_day(from)}'}',
                   style: muted,
                 ),
+                if (dueOn != null)
+                  Text(
+                    '${_isPast(dueOn) ? 'Was due' : 'Due by'} '
+                    '${_dayOf(dueOn)}',
+                    key: Key('due-on-${drone.name}'),
+                    style: muted,
+                  ),
                 if (due.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
@@ -264,88 +314,115 @@ class _DroneCard extends StatelessWidget {
 
 /// Each assembly of a drone against its interval, and a button to start
 /// the maintenance.
-Future<void> _showDue(BuildContext context, DroneMaintenance drone) =>
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final theme = Theme.of(dialogContext);
-        final canAdd = Services.of(context).canAdd;
-        return AlertDialog(
-          scrollable: true,
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 24,
-          ),
-          title: Text('Drone ${drone.name}'),
-          content: SizedBox(
-            width: 440,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final s in drone.sections)
-                  Padding(
-                    key: Key('due-${s.section.column}'),
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                s.section.title,
-                                style: theme.textTheme.titleSmall,
-                              ),
-                              Text(
-                                [
-                                  s.lastAt == null
-                                      ? 'Never done'
-                                      : 'Last ${_day(s.lastAt!)}',
-                                  'every ${s.interval.describe()}',
-                                ].join(' · '),
-                                style: theme.textTheme.bodySmall,
-                              ),
-                              if (!s.interval.isOff)
-                                Text(
-                                  s.describe(),
-                                  style: theme.textTheme.bodySmall,
-                                ),
-                            ],
+Future<void> _showDue(
+  BuildContext context,
+  DroneMaintenance drone,
+) => showDialog<void>(
+  context: context,
+  builder: (dialogContext) {
+    final theme = Theme.of(dialogContext);
+    final canAdd = Services.of(context).canAdd;
+    return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(drone.title),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final s in drone.sections)
+              Padding(
+                key: Key('due-${s.section.column}'),
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            s.section.title,
+                            style: theme.textTheme.titleSmall,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        UrgencyPill(switch (s.level) {
-                          DueLevel.ok => s.interval.isOff ? 'Off' : 'OK',
-                          DueLevel.soon => 'Soon',
-                          DueLevel.overdue => 'Due',
-                        }, urgencyOf(s.level)),
-                      ],
+                          Text(
+                            [
+                              s.lastAt == null
+                                  ? 'Never done'
+                                  : 'Last ${_day(s.lastAt!)}',
+                              'every ${s.interval.describe()}',
+                            ].join(' · '),
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          if (!s.interval.isOff)
+                            Text(
+                              [
+                                s.describe(),
+                                if (s.dueOn != null)
+                                  '${_isPast(s.dueOn!) ? 'was due' : 'due by'} '
+                                      '${_dayOf(s.dueOn!)}',
+                              ].join(' · '),
+                              style: theme.textTheme.bodySmall,
+                            ),
+                        ],
+                      ),
                     ),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            if (canAdd)
-              FilledButton.icon(
-                key: const Key('start-maintenance'),
-                onPressed: () {
-                  Navigator.pop(dialogContext);
-                  openMaintenance(context, aircraftId: drone.aircraftId);
-                },
-                icon: const Icon(Icons.engineering),
-                label: const Text('New maintenance'),
+                    const SizedBox(width: 8),
+                    UrgencyPill(switch (s.level) {
+                      DueLevel.ok => s.interval.isOff ? 'Off' : 'OK',
+                      DueLevel.soon => 'Soon',
+                      DueLevel.overdue => 'Due',
+                    }, urgencyOf(s.level)),
+                  ],
+                ),
               ),
           ],
-        );
-      },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Close'),
+        ),
+        if (canAdd)
+          FilledButton.icon(
+            key: const Key('start-maintenance'),
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              openMaintenance(
+                context,
+                aircraftId: drone.battery ? null : drone.id,
+                batteryId: drone.battery ? drone.id : null,
+              );
+            },
+            icon: const Icon(Icons.engineering),
+            label: const Text('New maintenance'),
+          ),
+      ],
     );
+  },
+);
+
+/// The first day a days limit runs out, of the assemblies that have one.
+DateTime? _earliestDueOn(DroneMaintenance d) {
+  DateTime? out;
+  for (final s in d.sections) {
+    final on = s.interval.isOff ? null : s.dueOn;
+    if (on != null && (out == null || on.isBefore(out))) out = on;
+  }
+  return out;
+}
+
+bool _isPast(DateTime day) {
+  final now = DateTime.now();
+  return day.isBefore(DateTime(now.year, now.month, now.day));
+}
+
+String _dayOf(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}.'
+    '${d.month.toString().padLeft(2, '0')}.${d.year}';
 
 /// "2026-08-07 10:48:45" -> "07.08.2026"
 String _day(String at) {
@@ -363,12 +440,14 @@ String formatHours(int seconds) {
 class _MaintenanceCard extends StatelessWidget {
   const _MaintenanceCard({
     required this.maintenance,
-    required this.drone,
+    required this.title,
     required this.technician,
   });
 
   final Maintenance maintenance;
-  final String drone;
+
+  /// "Drone 18", "Battery set 42".
+  final String title;
   final String technician;
 
   @override
@@ -378,7 +457,10 @@ class _MaintenanceCard extends StatelessWidget {
     final services = Services.of(context);
     final m = maintenance;
     final done = m.done.length;
-    final total = maintenanceSections.length;
+    final total = m.isBattery
+        ? batterySections.length
+        : droneSections.length +
+              (m.value(batterySections.first).isEmpty ? 0 : 1);
     final notes = m.row['notes'] as String? ?? '';
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -397,10 +479,7 @@ class _MaintenanceCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Drone $drone',
-                          style: theme.textTheme.titleMedium,
-                        ),
+                        Text(title, style: theme.textTheme.titleMedium),
                         Text(
                           [
                             _day(m.performedAt),
