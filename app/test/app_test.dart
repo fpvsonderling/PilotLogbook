@@ -36,6 +36,12 @@ void main() {
       find.widgetWithText(TextFormField, 'Take off'),
       '13:00:00',
     );
+    // The clock for landing opens at the take-off time.
+    await tester.tap(find.byTooltip('Clock').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextFormField, '13:00:00'), findsNWidgets(2));
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Land'),
       '13:03:30',
