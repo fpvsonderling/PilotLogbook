@@ -27,6 +27,22 @@ const maintenanceSections = [
   MaintenanceSection('fts', 'FTS'),
 ];
 
+/// Column of the battery assembly. Batteries go from drone to drone, so
+/// it is kept per battery set, not per drone.
+const powerSystem = 'power_system';
+
+/// What a drone's maintenance covers: everything but the batteries.
+final droneSections = [
+  for (final s in maintenanceSections)
+    if (s.column != powerSystem) s,
+];
+
+/// What a battery set's maintenance covers.
+final batterySections = [
+  for (final s in maintenanceSections)
+    if (s.column == powerSystem) s,
+];
+
 /// True when the stored value says only that the assembly was checked.
 bool isJustChecked(Object? value) =>
     (value?.toString().trim().toLowerCase() ?? '') ==
@@ -39,7 +55,16 @@ class Maintenance {
 
   String get id => row['id'] as String;
   String get performedAt => row['performed_at'] as String? ?? '';
-  String? get aircraftId => row['aircraft_id'] as String?;
+  String? get aircraftId => _id('aircraft_id');
+
+  /// Set when this is the maintenance of a battery set, not a drone.
+  String? get batteryId => _id('battery_id');
+  bool get isBattery => batteryId != null;
+
+  String? _id(String column) {
+    final v = (row[column] as String?)?.trim() ?? '';
+    return v.isEmpty ? null : v;
+  }
 
   String value(MaintenanceSection s) => row[s.column]?.toString().trim() ?? '';
 
@@ -128,6 +153,17 @@ class SectionDue {
   /// Null when it was never done: then only the flying counts.
   final int? daysSince;
 
+  /// The day the days limit runs out: last done + the interval's days.
+  /// Null without a days limit or when it was never done.
+  DateTime? get dueOn {
+    final at = lastAt == null
+        ? null
+        : DateTime.tryParse(lastAt!.split(' ').first);
+    final days = interval.days;
+    if (at == null || days == null) return null;
+    return DateTime(at.year, at.month, at.day + days);
+  }
+
   /// The largest share of a limit used up: 1.0 means due now.
   double get used {
     var share = 0.0;
@@ -162,15 +198,24 @@ class SectionDue {
     }
     if (i.flights != null) {
       final left = i.flights! - flightsSince;
-      parts.add(left >= 0 ? '$left flights left' : '${-left} flights over');
+      parts.add(
+        left >= 0
+            ? '${_n(left, 'flight')} left'
+            : '${_n(-left, 'flight')} over',
+      );
     }
     if (i.days != null && daysSince != null) {
       final left = i.days! - daysSince!;
-      parts.add(left >= 0 ? '$left days left' : '${-left} days over');
+      parts.add(
+        left >= 0 ? '${_n(left, 'day')} left' : '${_n(-left, 'day')} over',
+      );
     }
     return parts.join(' · ');
   }
 }
+
+/// 1 day, 2 days.
+String _n(int n, String word) => n == 1 ? '1 $word' : '$n ${word}s';
 
 double _max(double a, double b) => a > b ? a : b;
 
@@ -180,19 +225,27 @@ String _hm(int seconds) {
   return '$h:${m.toString().padLeft(2, '0')}';
 }
 
-/// Where a drone is since its last maintenance.
+/// Where a drone or a battery set is since its last maintenance.
 class DroneMaintenance {
   const DroneMaintenance({
-    required this.aircraftId,
+    required this.id,
     required this.name,
+    this.battery = false,
     this.last,
     required this.flightsSince,
     required this.secondsSince,
     this.sections = const [],
   });
 
-  final String aircraftId;
+  /// The drone's id, or the battery's when [battery].
+  final String id;
   final String name;
+
+  /// A battery set (Power System only) rather than a drone.
+  final bool battery;
+
+  /// "Drone 18", "Battery set 42".
+  String get title => battery ? 'Battery set $name' : 'Drone $name';
 
   /// The latest maintenance, null when there is none.
   final Maintenance? last;
@@ -209,6 +262,17 @@ class DroneMaintenance {
     DueLevel.ok,
     (l, s) => s.level.index > l.index ? s.level : l,
   );
+
+  /// The assembly closest to being due (or the furthest over); null when
+  /// every reminder is off.
+  SectionDue? get next {
+    SectionDue? best;
+    for (final s in sections) {
+      if (s.interval.isOff) continue;
+      if (best == null || s.used > best.used) best = s;
+    }
+    return best;
+  }
 
   /// Assemblies due soon or overdue, the most urgent first.
   List<SectionDue> get due => [
@@ -266,14 +330,19 @@ class MaintenanceLog {
     return bookIntervals[section] ?? const MaintenanceInterval();
   }
 
-  /// Flights of a drone that took off after [since] ('' = all of them).
-  /// A flight on the maintenance day counts when it took off after it.
-  (int, int) _flyingSince(String aircraftId, String since) {
+  /// Flights of a drone (or with a battery set, [column] battery_id) that
+  /// took off after [since] ('' = all of them). A flight on the
+  /// maintenance day counts when it took off after it.
+  (int, int) _flyingSince(
+    String id,
+    String since, {
+    String column = 'aircraft_id',
+  }) {
     final r = db.select(
       'SELECT COUNT(*) AS n, COALESCE(SUM(duration_s), 0) AS s '
-      'FROM flights WHERE deleted = 0 AND aircraft_id = ? AND '
+      'FROM flights WHERE deleted = 0 AND $column = ? AND '
       "(date || ' ' || COALESCE(NULLIF(takeoff_at, ''), '23:59:59')) > ?",
-      [aircraftId, since],
+      [id, since],
     ).single;
     return (r['n'] as int, r['s'] as int);
   }
@@ -291,53 +360,86 @@ class MaintenanceLog {
   }
 
   /// Every active drone with its last maintenance, the flying since and
-  /// each assembly against its interval; the most urgent first, then the
-  /// longest without maintenance.
+  /// each assembly but the Power System against its interval; the most
+  /// urgent first, then the longest without maintenance.
   List<DroneMaintenance> drones() {
-    final history = all();
+    final rows = _intervalRows();
+    return _units(
+      table: Tables.aircraft,
+      column: 'aircraft_id',
+      idOf: (m) => m.isBattery ? null : m.aircraftId,
+      sections: droneSections,
+      battery: false,
+      intervalOf: (sec, unit) =>
+          interval(sec, model: unit['model'] as String?, rows: rows),
+    );
+  }
+
+  /// Every active battery set with its Power System against its interval,
+  /// counting the flights flown with that set, on any drone.
+  List<DroneMaintenance> batterySets() {
+    final rows = _intervalRows();
+    return _units(
+      table: Tables.batteries,
+      column: 'battery_id',
+      idOf: (m) => m.batteryId,
+      sections: batterySections,
+      battery: true,
+      intervalOf: (sec, _) => interval(sec, rows: rows),
+    );
+  }
+
+  List<DroneMaintenance> _units({
+    required TableDef table,
+    required String column,
+    required String? Function(Maintenance) idOf,
+    required List<MaintenanceSection> sections,
+    required bool battery,
+    required MaintenanceInterval Function(String, DbRow) intervalOf,
+  }) {
     final latest = <String, Maintenance>{};
-    // Per drone and assembly the latest maintenance that did it.
+    // Per unit and assembly the latest maintenance that did it.
     final lastDone = <(String, String), String>{};
-    for (final m in history) {
-      final a = m.aircraftId;
-      if (a == null) continue;
-      latest.putIfAbsent(a, () => m);
-      for (final s in m.done) {
-        lastDone.putIfAbsent((a, s.column), () => m.performedAt);
+    for (final m in all()) {
+      final id = idOf(m);
+      if (id == null) continue;
+      final done = m.done.map((s) => s.column).toSet();
+      if (!sections.any((s) => done.contains(s.column))) continue;
+      latest.putIfAbsent(id, () => m);
+      for (final s in sections) {
+        if (done.contains(s.column)) {
+          lastDone.putIfAbsent((id, s.column), () => m.performedAt);
+        }
       }
     }
-    final rows = _intervalRows();
     final out = <DroneMaintenance>[];
-    for (final a in db.rows(
-      Tables.aircraft,
+    for (final u in db.rows(
+      table,
       where: 'COALESCE(active, 1) = 1',
       orderBy: 'name COLLATE NOCASE',
     )) {
-      final id = a['id'] as String;
+      final id = u['id'] as String;
       final last = latest[id];
       final cache = <String, (int, int)>{};
       (int, int) since(String at) =>
-          cache.putIfAbsent(at, () => _flyingSince(id, at));
+          cache.putIfAbsent(at, () => _flyingSince(id, at, column: column));
       final (n, s) = since(last?.performedAt ?? '');
       out.add(
         DroneMaintenance(
-          aircraftId: id,
-          name: a['name'] as String? ?? '',
+          id: id,
+          name: u['name'] as String? ?? '',
+          battery: battery,
           last: last,
           flightsSince: n,
           secondsSince: s,
           sections: [
-            for (final sec in maintenanceSections)
+            for (final sec in sections)
               () {
                 final at = lastDone[(id, sec.column)];
                 final (fn, fs) = since(at ?? '');
                 return SectionDue(
                   section: sec,
-                  interval: interval(
-                    sec.column,
-                    model: a['model'] as String?,
-                    rows: rows,
-                  ),
+                  interval: intervalOf(sec.column, u),
                   lastAt: at,
                   flightsSince: fn,
                   secondsSince: fs,
@@ -351,11 +453,16 @@ class MaintenanceLog {
     out.sort((a, b) {
       if (a.level != b.level) return b.level.index.compareTo(a.level.index);
       if ((a.last == null) != (b.last == null)) return a.last == null ? -1 : 1;
+      final ua = a.next?.used ?? 0, ub = b.next?.used ?? 0;
+      if (ua != ub) return ub.compareTo(ua);
       return b.secondsSince.compareTo(a.secondsSince);
     });
     return out;
   }
 
-  /// Drones with an assembly due soon or overdue.
-  int dueCount() => drones().where((d) => d.level != DueLevel.ok).length;
+  /// Drones and battery sets with an assembly due soon or overdue.
+  int dueCount() => [
+    ...drones(),
+    ...batterySets(),
+  ].where((d) => d.level != DueLevel.ok).length;
 }

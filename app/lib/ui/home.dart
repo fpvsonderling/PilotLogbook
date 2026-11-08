@@ -145,8 +145,8 @@ class _AlertCounts extends StatelessWidget {
               icon: Icons.engineering,
               count: drones,
               tooltip: drones == 1
-                  ? '1 drone due for maintenance'
-                  : '$drones drones due for maintenance',
+                  ? '1 drone or battery set due for maintenance'
+                  : '$drones drones or battery sets due for maintenance',
               onTap: () => onOpen('Maintenance'),
             ),
           if (competencies > 0)

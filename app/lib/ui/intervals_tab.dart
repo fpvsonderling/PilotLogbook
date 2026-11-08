@@ -49,11 +49,12 @@ class IntervalsTab extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
               child: Text(
-                model.isEmpty ? 'All drones' : 'Model $model',
+                model.isEmpty ? 'All drones and battery sets' : 'Model $model',
                 style: theme.textTheme.titleMedium,
               ),
             ),
-            for (final s in maintenanceSections)
+            // Battery sets are not of a drone model: Power System only here.
+            for (final s in model.isEmpty ? maintenanceSections : droneSections)
               () {
                 final own = rowFor(model, s.column);
                 final interval = log.interval(s.column, model: model);
@@ -65,7 +66,11 @@ class IntervalsTab extends StatelessWidget {
                 return ListTile(
                   key: Key('interval-$model-${s.column}'),
                   dense: true,
-                  title: Text(s.title),
+                  title: Text(
+                    s.column == powerSystem
+                        ? '${s.title} · each battery set'
+                        : s.title,
+                  ),
                   subtitle: Text('${interval.describe()} · $from'),
                   onTap: services.isAdmin
                       ? () => _edit(context, model, s, own, interval)
