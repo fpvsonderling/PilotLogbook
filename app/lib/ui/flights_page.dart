@@ -23,7 +23,14 @@ class FlightsPage extends StatefulWidget {
 class _FlightsPageState extends State<FlightsPage> {
   var _filter = const TableFilter();
 
-  static final _fields = <FilterField<DbRow>>[
+  bool get _cargo => widget.kind != 'inspection';
+
+  List<FilterField<DbRow>> get _fields => [
+    for (final f in _allFields)
+      if (_cargo || f.key != 'mission') f,
+  ];
+
+  static final _allFields = <FilterField<DbRow>>[
     FilterField('project', 'Project', (f) => [f['project_id'] as String?]),
     FilterField('drone', 'Drone', (f) => [f['aircraft_id'] as String?]),
     // Anyone in the crew, so a person finds every flight they were on.
@@ -39,7 +46,9 @@ class _FlightsPageState extends State<FlightsPage> {
     FilterField('mission', 'What', (f) => [f['mission'] as String?]),
   ];
 
+  /// Inspection flights show only the Inspection LogBook sheet's columns.
   static List<TableColumn<DbRow>> _columns({
+    required bool cargo,
     required Map<String, String> projects,
     required Map<String, String> aircraft,
     required Map<String, String> batteries,
@@ -51,13 +60,16 @@ class _FlightsPageState extends State<FlightsPage> {
     TableColumn('Take off', 80, (f) => f['takeoff_at'] as String? ?? ''),
     TableColumn('Land', 80, (f) => f['landing_at'] as String? ?? ''),
     TableColumn('Time', 70, (f) => formatDuration(f['duration_s'] as int?)),
-    TableColumn('Batt', 50, (f) => batteries[f['battery_id']] ?? ''),
-    TableColumn('Used', 50, (f) => '${f['used'] ?? ''}'),
-    TableColumn('Temp', 50, (f) => '${f['temp_c'] ?? ''}'),
-    TableColumn('What', 140, (f) => f['mission'] as String? ?? ''),
+    if (cargo) ...[
+      TableColumn('Batt', 50, (f) => batteries[f['battery_id']] ?? ''),
+      TableColumn('Used', 50, (f) => '${f['used'] ?? ''}'),
+      TableColumn('Temp', 50, (f) => '${f['temp_c'] ?? ''}'),
+      TableColumn('What', 140, (f) => f['mission'] as String? ?? ''),
+    ],
     TableColumn('RP', 140, (f) => people[f['rp_id']] ?? ''),
     TableColumn('PA', 140, (f) => people[f['pa_id']] ?? ''),
-    TableColumn('Spotter', 140, (f) => people[f['spotter_id']] ?? ''),
+    if (cargo)
+      TableColumn('Spotter', 140, (f) => people[f['spotter_id']] ?? ''),
     TableColumn('Notes', 260, (f) => f['notes'] as String? ?? ''),
   ];
 
@@ -67,10 +79,12 @@ class _FlightsPageState extends State<FlightsPage> {
     final kind = widget.kind;
     final title = widget.title;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showFlightForm(context, kind: kind),
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      floatingActionButton: AddButton(
+        child: FloatingActionButton.extended(
+          onPressed: () => showFlightForm(context, kind: kind),
+          icon: const Icon(Icons.add),
+          label: const Text('Add'),
+        ),
       ),
       body: DbBuilder(
         builder: (context) {
@@ -80,6 +94,7 @@ class _FlightsPageState extends State<FlightsPage> {
           final batteries = logbook.names(Tables.batteries);
           final people = logbook.names(Tables.people);
           final columns = _columns(
+            cargo: _cargo,
             projects: projects,
             aircraft: aircraft,
             batteries: batteries,
@@ -169,6 +184,7 @@ class _FlightsPageState extends State<FlightsPage> {
                                 drone: aircraft[f['aircraft_id']],
                                 battery: batteries[f['battery_id']],
                                 rp: people[f['rp_id']],
+                                pa: _cargo ? null : people[f['pa_id']],
                                 onTap: services.canChange(f)
                                     ? () => showFlightForm(
                                         context,
@@ -259,6 +275,7 @@ class _FlightCard extends StatelessWidget {
     required this.drone,
     required this.battery,
     required this.rp,
+    this.pa,
     required this.onTap,
   });
 
@@ -267,6 +284,9 @@ class _FlightCard extends StatelessWidget {
   final String? drone;
   final String? battery;
   final String? rp;
+
+  /// Shown on inspection flights, which have no battery and the like.
+  final String? pa;
   final VoidCallback? onTap;
 
   @override
@@ -279,6 +299,7 @@ class _FlightCard extends StatelessWidget {
     ].where((t) => t.isNotEmpty).join(' – ');
     final details = [
       if (rp != null) 'RP $rp',
+      if (pa != null) 'PA $pa',
       if (battery != null) 'Batt $battery',
       if (f['used'] != null) 'Used ${f['used']}',
       if (f['temp_c'] != null) '${f['temp_c']} °C',

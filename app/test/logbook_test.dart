@@ -14,6 +14,50 @@ void main() {
     expect(flightSeconds(null, '13:00:00'), isNull);
   });
 
+  test('each logbook offers its own drones, and a drone its batteries', () {
+    final db = LocalDb.inMemory();
+    final logbook = Logbook(db);
+    final fb3 = db.save(Tables.aircraft, {
+      'name': '18',
+      'active': 1,
+      'usage': 'cargo',
+    });
+    final m30 = db.save(Tables.aircraft, {
+      'name': 'Matrice 30T',
+      'active': 1,
+      'usage': 'inspection',
+    });
+    // From before the usage column: in both logbooks.
+    final old = db.save(Tables.aircraft, {'name': '24', 'active': 1});
+    expect(logbook.dronesFor('cargo').keys, unorderedEquals([fb3, old]));
+    expect(logbook.dronesFor('inspection').keys, unorderedEquals([m30, old]));
+    expect(logbook.dronesFor('inspection', keep: fb3).keys, contains(fb3));
+
+    final b45 = db.save(Tables.batteries, {
+      'name': '45',
+      'active': 1,
+      'aircraft_ids': fb3,
+    });
+    final b46 = db.save(Tables.batteries, {
+      'name': '46',
+      'active': 1,
+      'aircraft_ids': '$fb3,$old',
+    });
+    final any = db.save(Tables.batteries, {'name': '99', 'active': 1});
+    expect(logbook.batteriesFor(fb3).keys, unorderedEquals([b45, b46, any]));
+    expect(logbook.batteriesFor(old).keys, unorderedEquals([b46, any]));
+    expect(logbook.batteriesFor(null).keys, hasLength(3));
+  });
+
+  test('drone usage reads and writes the usage column', () {
+    expect(DroneUsage.of(''), DroneUsage.values.toSet());
+    expect(DroneUsage.of('inspection'), {DroneUsage.inspection});
+    expect(
+      DroneUsage.format({DroneUsage.inspection, DroneUsage.cargo}),
+      'cargo,inspection',
+    );
+  });
+
   test('duration format matches the old app', () {
     expect(formatDuration(210), '0:03:30');
     expect(formatDuration(87 * 3600 + 16 * 60), '87:16:00');
@@ -172,6 +216,36 @@ void main() {
       [for (final p in logbook.pilotStats(f)) (p.name, p.flights)],
       [('Emil', 1), ('Pavlo', 1)],
     );
+  });
+
+  test('Statistic counts a person apart as RP, PA and spotter', () {
+    final db = LocalDb.inMemory();
+    final logbook = Logbook(db);
+    final pavlo = db.save(Tables.people, {'name': 'Pavlo'});
+    final emil = db.save(Tables.people, {'name': 'Emil'});
+    db.save(Tables.flights, {
+      'rp_id': pavlo,
+      'spotter_id': emil,
+      'duration_s': 200,
+    });
+    db.save(Tables.flights, {'rp_id': pavlo, 'duration_s': 100});
+    db.save(Tables.flights, {'rp_id': emil, 'pa_id': pavlo, 'duration_s': 50});
+    db.save(Tables.flights, {'rp_id': emil, 'spotter_id': pavlo});
+    db.save(Tables.flights, {'rp_id': emil});
+    final gone = db.save(Tables.flights, {'rp_id': pavlo});
+    db.delete(Tables.flights, gone);
+
+    final f = TableFilter(chosen: {'pilot': pavlo});
+    final r = logbook.personRoles(pavlo, f);
+    expect((r.rp.flights, r.rp.seconds), (2, 300));
+    expect((r.pa.flights, r.pa.seconds), (1, 50));
+    expect(r.spotter.flights, 1);
+    expect(logbook.totals(f).all.flights, 4);
+    expect(
+      [for (final p in logbook.paStats()) (p.name, p.flights, p.seconds)],
+      [('Pavlo', 1, 50)],
+    );
+    expect(logbook.personRoles(emil).rp.flights, 3);
   });
 
   test('What splits into its picks, old spellings included', () {

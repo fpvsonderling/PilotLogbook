@@ -98,6 +98,40 @@ enum MissionTag {
       "($f.$column = 1 OR LOWER(COALESCE($f.mission, '')) LIKE '$_like')";
 }
 
+/// What a drone is used for, kept in its usage column comma separated.
+enum DroneUsage {
+  cargo('Cargo'),
+  inspection('Inspection');
+
+  const DroneUsage(this.label);
+  final String label;
+
+  /// The usages in a drone's usage column; empty means every one, as for
+  /// drones added before the column existed.
+  static Set<DroneUsage> of(String? usage) {
+    final names = {
+      for (final p in (usage ?? '').split(','))
+        if (p.trim().isNotEmpty) p.trim().toLowerCase(),
+    };
+    final out = {
+      for (final u in values)
+        if (names.contains(u.name)) u,
+    };
+    return out.isEmpty ? values.toSet() : out;
+  }
+
+  static String format(Set<DroneUsage> usages) => [
+    for (final u in values)
+      if (usages.contains(u)) u.name,
+  ].join(',');
+}
+
+/// Comma separated ids, e.g. a battery's aircraft_ids.
+Set<String> idList(String? ids) => {
+  for (final p in (ids ?? '').split(','))
+    if (p.trim().isNotEmpty) p.trim(),
+};
+
 /// Flights, flight time, aborted missions and near misses of one group:
 /// a pilot, a project, a drone, a month...
 class FlightStat {
@@ -118,6 +152,19 @@ class FlightStat {
 
   /// Average flight time, or null when no flight has a time.
   int? get averageSeconds => flights == 0 ? null : seconds ~/ flights;
+}
+
+/// One person's flights split by role: as remote pilot (RP), as pilot
+/// assistant (PA) and as spotter.
+class PersonRoles {
+  const PersonRoles({
+    required this.rp,
+    required this.pa,
+    required this.spotter,
+  });
+  final FlightStat rp;
+  final FlightStat pa;
+  final FlightStat spotter;
 }
 
 /// Figures over all flights for the top of the Statistic page.
@@ -158,6 +205,29 @@ class Logbook {
                 'SELECT id, name FROM ${table.name} ORDER BY name COLLATE NOCASE',
               ))
       r['id'] as String: (r['name'] as String?) ?? '',
+  };
+
+  /// Active drones for a logbook: [kind] is "cargo" or "inspection", as
+  /// in flights.kind. [keep] stays in even when it does not match, so an
+  /// old flight still shows its drone.
+  Map<String, String> dronesFor(String kind, {String? keep}) => {
+    for (final r in db.rows(Tables.aircraft, orderBy: 'name COLLATE NOCASE'))
+      if (r['id'] == keep ||
+          ((r['active'] as int? ?? 1) == 1 &&
+              DroneUsage.of(r['usage'] as String?).any((u) => u.name == kind)))
+        r['id'] as String: (r['name'] as String?) ?? '',
+  };
+
+  /// Active batteries that go in the drone [aircraftId]: those assigned to
+  /// it and those assigned to no drone. All of them when no drone is chosen.
+  Map<String, String> batteriesFor(String? aircraftId, {String? keep}) => {
+    for (final r in db.rows(Tables.batteries, orderBy: 'name COLLATE NOCASE'))
+      if (r['id'] == keep ||
+          ((r['active'] as int? ?? 1) == 1 &&
+              (aircraftId == null ||
+                  idList(r['aircraft_ids'] as String?).isEmpty ||
+                  idList(r['aircraft_ids'] as String?).contains(aircraftId))))
+        r['id'] as String: (r['name'] as String?) ?? '',
   };
 
   /// People whose roles include [role] (pilot, spotter, ...).
@@ -257,6 +327,14 @@ class Logbook {
     name: 'g.name',
   );
 
+  /// Flights and flight time per pilot assistant (PA, second pilot).
+  List<FlightStat> paStats([TableFilter? filter]) => _stats(
+    filter,
+    'f.pa_id',
+    join: 'JOIN people g ON g.id = f.pa_id',
+    name: 'g.name',
+  );
+
   /// Flights per spotter.
   List<FlightStat> spotterStats([TableFilter? filter]) => _stats(
     filter,
@@ -296,6 +374,43 @@ class Logbook {
     where: "f.date LIKE '____-__%'",
     orderBy: 'name DESC',
   );
+
+  /// One person's flights in [filter], counted apart per role, so flying
+  /// as RP is never mixed with being PA or spotter.
+  PersonRoles personRoles(String personId, [TableFilter? filter]) {
+    final (scope, args) = statsScope(filter);
+    final r = db.select(
+      'SELECT '
+      'COALESCE(SUM(f.rp_id = ?), 0) AS rp, '
+      'COALESCE(SUM(CASE WHEN f.rp_id = ? THEN f.duration_s END), 0) AS rs, '
+      'COALESCE(SUM(f.pa_id = ?), 0) AS pa, '
+      'COALESCE(SUM(CASE WHEN f.pa_id = ? THEN f.duration_s END), 0) AS ps, '
+      'COALESCE(SUM(f.spotter_id = ?), 0) AS sp, '
+      'COALESCE(SUM(CASE WHEN f.spotter_id = ? THEN f.duration_s END), 0) AS ss '
+      'FROM flights f WHERE f.deleted = 0$scope',
+      [for (var i = 0; i < 6; i++) personId, ...args],
+    ).single;
+    return PersonRoles(
+      rp: FlightStat(
+        'rp',
+        'RP',
+        flights: r['rp'] as int,
+        seconds: r['rs'] as int,
+      ),
+      pa: FlightStat(
+        'pa',
+        'PA',
+        flights: r['pa'] as int,
+        seconds: r['ps'] as int,
+      ),
+      spotter: FlightStat(
+        'spotter',
+        'Spotter',
+        flights: r['sp'] as int,
+        seconds: r['ss'] as int,
+      ),
+    );
+  }
 
   FlightTotals totals([TableFilter? filter]) {
     final (where, args) = statsScope(filter);
@@ -399,7 +514,7 @@ class Logbook {
     FilterField('drone', 'Drone', (f) => [f['aircraft_id'] as String?]),
     FilterField(
       'pilot',
-      'Pilot',
+      'Person (any role)',
       (f) => [
         f['rp_id'] as String?,
         f['pa_id'] as String?,

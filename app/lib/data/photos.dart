@@ -38,7 +38,7 @@ class PhotoStore {
   List<DbRow> pendingUploads(LocalDb db) => [
     for (final r in db.rows(
       Tables.faultPhotos,
-      where: "COALESCE(drive_file_id, '') = ''",
+      where: "COALESCE(drive_file_id, '') = '' AND COALESCE(storage_path, '') = ''",
     ))
       if (file(r['id'] as String).existsSync()) r,
   ];

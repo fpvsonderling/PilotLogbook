@@ -1,8 +1,9 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/sync/sync_service.dart';
+import '../data/update_check.dart';
 
 /// Hands the database, queries and sync to every screen.
 class Services extends InheritedWidget {
@@ -11,12 +12,20 @@ class Services extends InheritedWidget {
     required this.db,
     required this.logbook,
     required this.sync,
+    required this.theme,
+    this.updates,
     required super.child,
   });
 
   final LocalDb db;
   final Logbook logbook;
   final SyncService sync;
+
+  /// Light / dark / system, chosen in Settings and saved on this device.
+  final ValueNotifier<ThemeMode> theme;
+
+  /// Tells when a newer app version has been published (none in tests).
+  final UpdateChecker? updates;
 
   static Services of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Services>()!;
@@ -27,9 +36,15 @@ class Services extends InheritedWidget {
   bool get isAdmin => sync.isAdmin;
   bool canChange(DbRow row) => sync.canChange(row);
 
+  /// False for a viewer (read only key): add buttons are hidden.
+  bool get canAdd => sync.canAdd;
+
   @override
   bool updateShouldNotify(Services oldWidget) =>
-      db != oldWidget.db || sync != oldWidget.sync;
+      db != oldWidget.db ||
+      sync != oldWidget.sync ||
+      theme != oldWidget.theme ||
+      updates != oldWidget.updates;
 }
 
 /// Rebuilds [builder] whenever the local database or the sync state (such
@@ -46,4 +61,20 @@ class DbBuilder extends StatelessWidget {
     ]),
     builder: (context, _) => builder(context),
   );
+}
+
+/// An add button that disappears for a viewer (read only key), also when
+/// the role becomes known during a sync.
+class AddButton extends StatelessWidget {
+  const AddButton({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final sync = Services.of(context).sync;
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) => sync.canAdd ? child : const SizedBox.shrink(),
+    );
+  }
 }

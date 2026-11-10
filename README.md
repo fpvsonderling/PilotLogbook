@@ -1,71 +1,80 @@
 # Pilot Logbook
 
-Журнал полётов дронов для компании: полёты, чеклисты, отчёты о неисправностях, статистика пилотов. Приложение работает без интернета и синхронизируется с одной Google-таблицей, когда сеть появляется.
+A drone flight logbook for a company: flights, checklists, fault reports, maintenance, documents and pilot statistics, shared by every pilot in the organization. The app works offline and syncs with Firebase whenever a connection is available.
 
-- `app/` — приложение на Flutter (сначала Windows, потом Android, iOS, macOS).
-- `apps_script/` — скрипт для Google-таблицы: принимает данные от приложения, сохраняет фото на Google Drive и раз в месяц делает бэкап.
+- `app/` is the Flutter app for Windows, Android, iOS and macOS.
+- `firebase/` holds the Firestore and Storage security rules and their emulator tests.
+- `apps_script/` is the Google Apps Script that moved the data from Google Sheets to Firebase. It now keeps the spreadsheet as a read-only daily copy of Firebase and makes a monthly backup.
 
-## Как это устроено
+## How it works
 
 ```
-Приложение (локальная база SQLite, работает офлайн)
-        │  одна HTTPS-синхронизация: отправить свои изменения, забрать чужие
-        ▼
-Apps Script в Google-таблице  ──►  листы: flights, people, aircraft, ...
-                               ──►  Google Drive: PilotLogbook Photos, PilotLogbook Backups
+App (local SQLite database, works offline)
+  ├─► Firebase Auth: each access key is an account (email + password packed into the key)
+  ├─► Cloud Firestore: flights, people, aircraft, ... + meta/changes, members
+  └─► Cloud Storage: fault photos (photos/<id>.jpg) and documents (documents/<folder>/<file>)
+
+Apps Script, once a day: copies Firestore back into the Google Sheets tabs (read-only copy)
+Apps Script, on the 1st of each month: copies the spreadsheet to Drive › PilotLogbook Backups
 ```
 
-- Каждая таблица базы — отдельный лист. В первой строке названия колонок, все значения хранятся как текст.
-- У каждой строки есть `id`, `updated_at`, `server_seq`, `deleted` и `created_by`. Если одну запись правили на двух устройствах, побеждает более поздняя правка. Удалённые строки не стираются, им ставится `deleted = 1`.
-- Бэкап: 1-го числа каждого месяца около 03:00 скрипт кладёт копию всей таблицы в папку **PilotLogbook Backups** на Google Drive.
+- Every database table is a Firestore collection, and every row is a document with the same `id`. The app talks to Firebase over REST, without the Firebase SDK.
+- Every row has `id`, `updated_at`, `deleted` and `created_by`. When the same record was edited on two devices, the later edit wins. Deleted rows are not erased; they get `deleted = 1`.
+- `meta/changes` keeps the time of the last change of each table, so a sync with nothing new reads a single document.
+- Sync runs at start-up, after every save and from the **Sync** button at the top. The number on the button shows how many changes are not sent yet.
 
-## Настройка (один раз, ~10 минут)
+## Modules
 
-1. Откройте [script.google.com](https://script.google.com) под Google-аккаунтом компании и нажмите **Новый проект**. Если что-то не открывается, используйте окно инкогнито (Ctrl+Shift+N) и войдите только в один аккаунт.
-2. Откройте [код скрипта](https://raw.githubusercontent.com/fpvsonderling/PilotLogbook/main/apps_script/Code.gs), выделите всё (Ctrl+A), скопируйте (Ctrl+C) и вставьте в редактор вместо того, что там написано. Сохраните (Ctrl+S).
-3. Вверху выберите функцию **setup** и нажмите **Выполнить**. Google попросит разрешения: **Проверить разрешения** → ваш аккаунт → **Дополнительно** → **Перейти на страницу** → **Разрешить**. Скрипт сам создаст таблицу «Pilot Logbook» со всеми листами и включит ежемесячный бэкап.
-4. Нажмите **Начать развёртывание → Новое развёртывание**. Тип (шестерёнка) — **Веб-приложение**, «Запуск от имени»: **Я**, «Кто имеет доступ»: **Все**. Нажмите **Начать развёртывание**.
-5. Выберите функцию **connectionLink** и нажмите **Выполнить**. Внизу, в журнале, появятся две ссылки вида `https://script.google.com/macros/s/.../exec?key=...`: первая для пилотов, вторая для администраторов.
-6. В приложении откройте **Settings**, вставьте ссылку и нажмите **Save and sync**.
+- **Cargo LogBook** and **Inspection LogBook**: flights, both stored in the `flights` collection, told apart by `kind` (`cargo` / `inspection`). Each logbook offers only the drones marked for it (**Reference data → Drones → Used for**), and a cargo flight offers only the batteries of the chosen drone.
+- **Daily checks**: the pilot picks themselves and a drone, and the app shows that drone's checklist (UA + GCS for FB3 per the FB3 Flight Manual v2.5.0, a short list for M30T). Each section is **OK**, **Problem** or **N/A**, and problems from the last three checks of the drone are shown at the top. Checklist items are in `app/lib/data/checklists.dart`.
+- **Fault Repair**: report, repair and sign-off of a fault, with photos.
+- **Maintenance**: per drone and per assembly (Arm, Center Plate, Propulsion, Load, Legs, Power System per battery set, FTS), with the flights and flight hours since the last service and due dates.
+- **Projects** and **Competencies**: projects, and each person's competencies with expiry dates. The top bar warns when maintenance is due or a competency is expired or running out.
+- **Statistic**: per pilot, with filters and PDF export.
+- **Reference data**: people (roles pilot / spotter / technician / signatory / admin / viewer), projects, drones, batteries and task types. Changes reach everyone after a sync.
+- **Nm**: bolt torque values to look up.
+- **Documents**: manuals, procedures and certificates. Everyone can open them, only admins add, change or delete them. Each device keeps a copy, so documents open offline.
 
-Ссылка для пилотов одна на всех: каждый вставляет её у себя в Settings. Ссылку администратора давайте только тем, кто может менять и удалять данные.
+## Installing the app
 
-## Кто что может менять
+Every version is on the [Releases](https://github.com/fpvsonderling/PilotLogbook/releases/latest) page. The app checks for a new version by itself and offers to install it.
 
-- **Администратор** (вторая ссылка из `connectionLink`): открывает по клику и меняет любую запись, в окне есть **Delete**. В Reference data удалённый человек или дрон пропадает из списков выбора, но в старых полётах его имя остаётся.
-- **Пилот со своей ссылкой**: меняет и удаляет только те полёты и daily checks, которые добавил сам. Свою ссылку делает администратор: **Reference data → People →** человек **→ Personal link**. Ссылка копируется, её нужно отправить этому человеку, он вставляет её у себя в Settings вместо общей.
-- **Общая ссылка пилотов**: можно только добавлять, сохранённые записи не открываются.
-- Внизу **Settings** видно, какой доступ у этого компьютера.
-- Запрет проверяет и сам скрипт: даже изменённое приложение не сможет изменить чужую строку в таблице. Кто добавил строку, записано в колонке `created_by`.
+- **Windows:** download `PilotLogbook-windows-<version>.zip`, unzip it and run `PilotLogbook\pilot_logbook.exe`. Windows SmartScreen may warn because the app is not signed: **More info → Run anyway**.
+- **Android:** on the phone, download `PilotLogbook-android-<version>.apk` (or the always-latest [PilotLogbook.apk](https://github.com/fpvsonderling/PilotLogbook/releases/download/android-latest/PilotLogbook.apk)) and open it. Allow installing from this source, then **Install**. If Play Protect appears, choose **Install anyway**.
+- **macOS:** download `PilotLogbook-macos-<version>.zip`, unzip it and drag **Pilot Logbook** to Applications. The first time: right-click → **Open** → **Open**.
+- **iPhone / iPad:** install the new version from TestFlight.
 
-## Установка приложения на Windows
+Then open **Settings → Access key**, paste your key and press **Save and sync**.
 
-1. Откройте вкладку **Actions** этого репозитория, затем последний успешный запуск **CI**. Внизу в разделе **Artifacts** скачайте `PilotLogbook-windows`.
-2. Распакуйте архив в любую папку и запустите `pilot_logbook.exe`. Windows может показать предупреждение SmartScreen, потому что приложение пока не подписано: **Подробнее → Выполнить в любом случае**.
-3. В приложении откройте **Settings**, вставьте ссылку из шага 5 настройки и нажмите **Save and sync**.
-4. В **Reference data** заполните людей (с ролями pilot / spotter / technician / signatory), проекты, дроны, батареи и типы заданий. Они появятся у всех после синхронизации.
+A new version installs over the old one and keeps the data on the device. CI signs every Android build with the same key, stored in the Actions cache. GitHub removes a cache unused for 7 days; to keep the key permanently, add the repository secrets `ANDROID_KEYSTORE_BASE64` (a keystore with alias `pilotlogbook`, base64-encoded) and `ANDROID_KEYSTORE_PASSWORD`. If the key ever changes, press **Sync**, uninstall the old app and install the new one.
 
-Синхронизация запускается при старте, после каждого сохранения и по кнопке **Sync** вверху. Цифра на кнопке показывает, сколько изменений ещё не отправлено.
+## Access keys and permissions
 
-## Установка приложения на Android
+Every user signs in with an access key `PL2-…`. The rules in `firebase/firestore.rules` and `firebase/storage.rules` check every change, so even a modified app cannot change someone else's row.
 
-1. На телефоне откройте ссылку [PilotLogbook.apk](https://github.com/fpvsonderling/PilotLogbook/releases/download/android-latest/PilotLogbook.apk) (последняя сборка). Файл также есть в **Actions → CI → Artifacts → `PilotLogbook-android`**.
-2. Откройте скачанный файл. Android спросит разрешение устанавливать приложения из браузера: **Настройки → Разрешить из этого источника**, затем **Установить**. Если появится Play Защита, нажмите **Всё равно установить**.
-3. Скопируйте свою ссылку подключения (например, из сообщения), в приложении откройте меню **☰ → Settings**, нажмите значок вставки справа в поле и **Save and sync**.
+- **Master admin key**: changes and deletes everything. Only for the owner.
+- **Personal key**: an admin makes it in **Reference data → People →** person **→ Personal access key** and sends it to that person, who pastes it in **Settings → Access key**. What it allows depends on the person's roles in People:
+  - regular roles (pilot, spotter, ...): add records, and change or delete only their own;
+  - **admin**: change and delete everything, make keys for others;
+  - **viewer (read only)**: see everything, add or change nothing (the add buttons are hidden).
+- A personal key works only while the person is **Active** in People. Untick Active or delete the person, and the key stops working at once. **New key** makes a new key and turns the old one off (lost phone, key sent to the wrong person).
+- **Shared pilots' key**: can only add records. To turn it off, set `active` to `false` on its document in the `members` collection in the Firebase console.
+- The bottom of **Settings** shows what access this device has.
 
-Новая версия ставится поверх старой, данные на телефоне сохраняются: CI подписывает все сборки одним ключом, который хранится в кэше Actions. GitHub удаляет кэш, которым не пользовались 7 дней; чтобы ключ был постоянным, добавьте секреты репозитория `ANDROID_KEYSTORE_BASE64` (keystore с alias `pilotlogbook` в base64) и `ANDROID_KEYSTORE_PASSWORD`. Если ключ сменился, перед установкой новой версии нажмите **Sync**, удалите старое приложение и поставьте новое.
+`members/{uid}` records whose key each account is: `kind` (`master` / `shared` / `person`), `person_id` and `active`.
 
-## Daily checks
+Keep keys private: anyone with a key can reach the data.
 
-Раздел **Daily checks**: пилот выбирает себя и дрон, и приложение показывает чеклист этого дрона. Для FB3 (18, 19, 24) это UA и GCS вместе по FB3 Flight Manual v2.5.0, для M30T свой короткий список. У каждой секции есть кнопки **OK** / **Problem** (и **N/A**, где секция может не использоваться). Сверху видны проблемы из трёх последних чеков этого дрона.
+## Google Sheets (read-only backup)
 
-В таблице это листы `daily_checks_fb3` и `daily_checks_m30t`: одна строка на чек, одна колонка на секцию со значением `Ok`, `Not used` или текстом проблемы, как в старой таблице AppSheet. Пункты чеклистов лежат в `app/lib/data/checklists.dart`.
+Before November 2026 the backend was a Google Sheets spreadsheet with an Apps Script web app. `moveToFirebase` in `apps_script/Code.gs` moved all data and files to Firebase and gave every app its new `PL2-…` key on its next sync. Since then the spreadsheet no longer accepts changes:
 
-## Безопасность
+- `mirrorFromFirebase` copies every Firestore collection back into its tab once a day (trigger made by `installFirebaseTriggers`).
+- `monthlyBackup` saves a copy of the spreadsheet to the Drive folder **PilotLogbook Backups** on the 1st of each month.
 
-Ссылка подключения общая для всей компании и содержит ключ доступа: любой, у кого она есть, может добавлять данные в таблицу, поэтому не публикуйте её. Если ссылка утекла, удалите свойство `API_TOKEN` в **Настройках проекта → Свойства скрипта**, снова запустите `setup`, затем `connectionLink`, и раздайте новую ссылку. Для ссылки администратора то же самое со свойством `ADMIN_TOKEN`. Личные ссылки хранятся в свойстве `PERSON_TOKENS`: удалите его, чтобы отключить все личные ссылки.
+When you change `Code.gs`, redeploy it in Apps Script with **Deploy → Manage deployments →** the active deployment **→ Edit → Version: New version → Deploy**, so the URL stays the same.
 
-## Разработка
+## Development
 
 ```bash
 cd app
@@ -74,8 +83,15 @@ flutter analyze
 flutter test
 flutter run -d windows
 
-# тесты Apps Script (из корня репозитория)
+# Apps Script tests (from the repository root)
 node --test 'apps_script/test/*.test.js'
+
+# Firestore / Storage rules and sync tests on the Firebase emulators (needs Node and Java)
+cd firebase
+npm ci
+npm test
 ```
 
-Колонки таблиц описаны в `app/lib/data/schema.dart`, и такой же список есть в `SCHEMA` в `apps_script/Code.gs`. Тест `schema_test.dart` следит, чтобы они совпадали: при добавлении колонки меняйте оба файла и заново запускайте `setup` в таблице.
+Table columns are defined in `app/lib/data/schema.dart`, and the same list is in `SCHEMA` in `apps_script/Code.gs`; `schema_test.dart` checks that they match. The rules in `firebase/` are copied into `Code.gs` as well, and a test keeps them equal.
+
+Releases: **Actions → CI → Run workflow** with a version such as `v1.9.0` builds Windows, Android and macOS, publishes a GitHub release and uploads the iOS build to TestFlight.

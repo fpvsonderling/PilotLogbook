@@ -39,10 +39,27 @@ class _StatsPageState extends State<StatsPage> {
         };
         final f = _filter;
         final totals = logbook.totals(f);
-        final figures = _figures(totals);
+        final person = f.chosen['pilot'];
+        final figures = _figures(
+          totals,
+          person == null ? null : logbook.personRoles(person, f),
+        );
         final sections = [
           StatsSection('Projects', logbook.projectStats(f), total: true),
-          StatsSection('Pilots (as RP)', logbook.pilotStats(f), total: true),
+          StatsSection('Remote pilot (RP)', logbook.pilotStats(f), total: true),
+          StatsSection(
+            'Pilot assistant (PA)',
+            logbook.paStats(f),
+            total: true,
+            safety: false,
+          ),
+          StatsSection(
+            'Spotter',
+            logbook.spotterStats(f),
+            total: true,
+            time: false,
+            safety: false,
+          ),
           StatsSection('Drones', logbook.droneStats(f), total: true),
           StatsSection('Cargo / Inspection', [
             for (final k in logbook.kindStats(f))
@@ -59,12 +76,6 @@ class _StatsPageState extends State<StatsPage> {
             'Last 12 months',
             logbook.monthStats(f).take(12).toList(),
             bars: true,
-          ),
-          StatsSection(
-            'Spotters',
-            logbook.spotterStats(f),
-            time: false,
-            safety: false,
           ),
         ];
         final describe = f.describe<DbRow>(
@@ -110,10 +121,28 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  static List<StatsFigure> _figures(FlightTotals totals) {
+  /// [roles] is there when one person is chosen: their flights as RP, PA
+  /// and spotter, each counted apart, next to all the flights they were on.
+  static List<StatsFigure> _figures(FlightTotals totals, PersonRoles? roles) {
     final all = totals.all;
+    StatsFigure role(String label, FlightStat r) => StatsFigure(
+      label,
+      '${r.flights}',
+      note: r.flights == 0 ? null : formatDuration(r.seconds),
+    );
     return [
-      StatsFigure('Flights', '${all.flights}'),
+      if (roles == null)
+        StatsFigure('Flights', '${all.flights}')
+      else ...[
+        role('As RP (pilot)', roles.rp),
+        role('As PA (2nd pilot)', roles.pa),
+        role('As spotter', roles.spotter),
+        StatsFigure(
+          'Flights in any role',
+          '${all.flights}',
+          note: 'each flight counted once',
+        ),
+      ],
       StatsFigure('Flight time', formatDuration(all.seconds)),
       StatsFigure(
         'Aborted missions',
@@ -155,8 +184,8 @@ class _StatsPageState extends State<StatsPage> {
         figures: figures,
         sections: sections,
         filters: filters,
-        regular: await rootBundle.load('assets/fonts/Barlow-Regular.ttf'),
-        bold: await rootBundle.load('assets/fonts/Barlow-SemiBold.ttf'),
+        regular: await rootBundle.load('assets/fonts/Inter-Regular.ttf'),
+        bold: await rootBundle.load('assets/fonts/Inter-SemiBold.ttf'),
       );
       if (!context.mounted) return;
       await deliverPdf(

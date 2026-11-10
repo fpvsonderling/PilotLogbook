@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../data/competencies.dart';
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/schema.dart';
 import 'services.dart';
+import 'theme.dart';
+import 'time_picker.dart';
 
 Future<void> showFlightForm(
   BuildContext context, {
@@ -64,6 +67,10 @@ class _FlightFormState extends State<FlightForm> {
 
   String? _text(String key) => _v[key]?.toString();
 
+  /// Inspection flights keep only what the Inspection LogBook sheet has:
+  /// date, project, drone, take off, land, time, RP, PA and notes.
+  bool get _cargo => widget.kind != 'inspection';
+
   @override
   void initState() {
     super.initState();
@@ -91,11 +98,13 @@ class _FlightFormState extends State<FlightForm> {
       'takeoff_at': _takeoff.text.trim(),
       'landing_at': _landing.text.trim(),
       'duration_s': flightSeconds(_takeoff.text, _landing.text),
-      'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
-      'temp_c': int.tryParse(_temp.text.trim()),
-      'mission': _what.join(', '),
-      for (final t in MissionTag.values)
-        t.column: _what.contains(t.label) ? 1 : null,
+      if (_cargo) ...{
+        'used': double.tryParse(_used.text.trim().replaceAll(',', '.')),
+        'temp_c': int.tryParse(_temp.text.trim()),
+        'mission': _what.join(', '),
+        for (final t in MissionTag.values)
+          t.column: _what.contains(t.label) ? 1 : null,
+      },
       'notes': _notes.text.trim(),
     });
     Navigator.of(context).pop();
@@ -181,11 +190,23 @@ class _FlightFormState extends State<FlightForm> {
                   value: _v['project_id'] as String?,
                   onChanged: (id) => setState(() => _v['project_id'] = id),
                 ),
+                // Only drones marked for this logbook under Reference data.
                 _ChoiceField(
                   label: 'Drone',
-                  options: logbook.names(Tables.aircraft, activeOnly: true),
+                  options: logbook.dronesFor(
+                    widget.kind,
+                    keep: widget.flight?['aircraft_id'] as String?,
+                  ),
                   value: _v['aircraft_id'] as String?,
-                  onChanged: (id) => setState(() => _v['aircraft_id'] = id),
+                  onChanged: (id) => setState(() {
+                    _v['aircraft_id'] = id;
+                    // A battery of another drone is taken off.
+                    if (!logbook
+                        .batteriesFor(id)
+                        .containsKey(_v['battery_id'])) {
+                      _v['battery_id'] = null;
+                    }
+                  }),
                 ),
                 _TimeField(
                   label: 'Take off',
@@ -196,41 +217,50 @@ class _FlightFormState extends State<FlightForm> {
                   label: 'Land',
                   controller: _landing,
                   now: () => _timeFormat.format(DateTime.now()),
+                  // The clock starts at take-off when landing is still empty.
+                  fallback: _takeoff,
                 ),
-                _ChoiceField(
-                  label: 'Battery',
-                  options: logbook.names(Tables.batteries, activeOnly: true),
-                  value: _v['battery_id'] as String?,
-                  onChanged: (id) => setState(() => _v['battery_id'] = id),
-                ),
-                Row(
-                  children: [
-                    Expanded(child: _number('Used', _used, decimal: true)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _number('Temp °C', _temp)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // Several can be picked, e.g. Double and Aborted; saved
-                // comma separated as in AppSheet: "Double, Aborted".
-                _MultiChoiceField(
-                  label: 'What',
-                  options: [
-                    // Old flights may name things no longer in the list.
-                    for (final p in _what)
-                      if (!missions.contains(p) &&
-                          !MissionTag.values.any((t) => t.label == p))
-                        p,
-                    ...missions,
-                    for (final t in MissionTag.values) t.label,
-                  ],
-                  value: _what,
-                  onChanged: (v) => setState(() {
-                    _what
-                      ..clear()
-                      ..addAll(v);
-                  }),
-                ),
+                if (_cargo) ...[
+                  // The batteries of the chosen drone; rebuilt when it changes.
+                  _ChoiceField(
+                    key: ValueKey('battery-${_v['aircraft_id']}'),
+                    label: 'Battery',
+                    options: logbook.batteriesFor(
+                      _v['aircraft_id'] as String?,
+                      keep: _v['battery_id'] as String?,
+                    ),
+                    value: _v['battery_id'] as String?,
+                    onChanged: (id) => setState(() => _v['battery_id'] = id),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(child: _number('Used', _used, decimal: true)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _number('Temp °C', _temp)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Several can be picked, e.g. Double and Aborted; saved
+                  // comma separated as in AppSheet: "Double, Aborted".
+                  _MultiChoiceField(
+                    label: 'What',
+                    options: [
+                      // Old flights may name things no longer in the list.
+                      for (final p in _what)
+                        if (!missions.contains(p) &&
+                            !MissionTag.values.any((t) => t.label == p))
+                          p,
+                      ...missions,
+                      for (final t in MissionTag.values) t.label,
+                    ],
+                    value: _what,
+                    onChanged: (v) => setState(() {
+                      _what
+                        ..clear()
+                        ..addAll(v);
+                    }),
+                  ),
+                ],
                 _person(
                   'RP',
                   'rp_id',
@@ -238,11 +268,12 @@ class _FlightFormState extends State<FlightForm> {
                   required: true,
                 ),
                 _person('PA', 'pa_id', logbook.peopleWithRole('pilot')),
-                _person(
-                  'Spotter',
-                  'spotter_id',
-                  logbook.peopleWithRole('spotter'),
-                ),
+                if (_cargo)
+                  _person(
+                    'Spotter',
+                    'spotter_id',
+                    logbook.peopleWithRole('spotter'),
+                  ),
                 TextFormField(
                   controller: _notes,
                   decoration: const InputDecoration(labelText: 'Notes'),
@@ -283,17 +314,33 @@ class _FlightFormState extends State<FlightForm> {
     bool required = false,
   }) {
     final value = _v[key] as String?;
+    // A warning, not a block: the admin sees everyone's competencies, a
+    // pilot only their own.
+    final expired = value == null || key == 'spotter_id'
+        ? const <Competency>[]
+        : CompetencyLog(Services.of(context).db)
+              .expired(value, day: _v['date'] as String?);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String?>(
         initialValue: people.containsKey(value) ? value : null,
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(
+          labelText: label,
+          helperText: expired.isEmpty
+              ? null
+              : 'Expired: ${[for (final c in expired) '${c.type} (${c.expiresOn})'].join(', ')}',
+          helperMaxLines: 3,
+          helperStyle: TextStyle(
+            color: CheckColors.of(context).problem,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         items: [
           if (!required) const DropdownMenuItem(value: null, child: Text('—')),
           for (final e in people.entries)
             DropdownMenuItem(value: e.key, child: Text(e.value)),
         ],
-        onChanged: (id) => _v[key] = id,
+        onChanged: (id) => setState(() => _v[key] = id),
         validator: (v) => required && v == null ? 'Required' : null,
       ),
     );
@@ -326,6 +373,7 @@ class _DateField extends StatelessWidget {
 /// A row of buttons, like the project and drone pickers in AppSheet.
 class _ChoiceField extends FormField<String> {
   _ChoiceField({
+    super.key,
     required String label,
     required Map<String, String> options,
     required String? value,
@@ -342,7 +390,11 @@ class _ChoiceField extends FormField<String> {
                errorText: state.errorText,
              ),
              child: options.isEmpty
-                 ? const Text('Add them under Reference data')
+                 ? Text(
+                     label == 'Project'
+                         ? 'The admin adds projects on the Projects page'
+                         : 'Add them under Reference data',
+                   )
                  : Wrap(
                      spacing: 8,
                      runSpacing: 8,
@@ -412,26 +464,56 @@ class _TimeField extends StatelessWidget {
     required this.label,
     required this.controller,
     required this.now,
+    this.fallback,
   });
 
   final String label;
   final TextEditingController controller;
   final String Function() now;
+  final TextEditingController? fallback;
+
+  Future<void> _pick(BuildContext context) async {
+    final initial =
+        parseTimeOfDay(controller.text) ??
+        parseTimeOfDay(fallback?.text) ??
+        parseTimeOfDay(now())!;
+    final picked = await showSecondsTimePicker(
+      context,
+      title: label,
+      initial: initial,
+    );
+    if (picked != null) controller.text = formatTimeOfDay(picked);
+  }
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: TextFormField(
-      controller: controller,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: 'HH:mm:ss',
-        suffixIcon: TextButton(
-          onPressed: () => controller.text = now(),
-          child: const Text('Now'),
+  Widget build(BuildContext context) {
+    // On a phone a tap opens the clock and no keyboard; on a PC the time
+    // can still be typed, and the clock button opens the clock.
+    final touch = switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: controller,
+        keyboardType: touch ? TextInputType.none : TextInputType.datetime,
+        onTap: touch ? () => _pick(context) : null,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: 'HH:mm:ss',
+          prefixIcon: IconButton(
+            tooltip: 'Clock',
+            icon: const Icon(Icons.schedule),
+            onPressed: () => _pick(context),
+          ),
+          suffixIcon: TextButton(
+            onPressed: () => controller.text = now(),
+            child: const Text('Now'),
+          ),
         ),
+        validator: (v) => parseTimeOfDay(v) == null ? 'Time as HH:mm:ss' : null,
       ),
-      validator: (v) => parseTimeOfDay(v) == null ? 'Time as HH:mm:ss' : null,
-    ),
-  );
+    );
+  }
 }

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pilot_logbook/data/checklists.dart';
 import 'package:pilot_logbook/data/local_db.dart';
 import 'package:pilot_logbook/data/schema.dart';
+import 'package:pilot_logbook/data/sync/sync_service.dart';
 import 'package:pilot_logbook/main.dart';
 import 'package:pilot_logbook/ui/daily_check_screen.dart';
 
@@ -15,8 +16,7 @@ void main() {
   // draw every letter as a square box).
   setUpAll(() async {
     for (final (family, files) in [
-      ('Barlow', ['Regular', 'Medium', 'SemiBold', 'Bold']),
-      ('Barlow Condensed', ['SemiBold', 'Bold']),
+      ('Inter', ['Regular', 'Medium', 'SemiBold', 'Bold']),
     ]) {
       final loader = FontLoader(family);
       for (final f in files) {
@@ -124,12 +124,33 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    await tester.tap(find.byKey(const Key('save-check')));
+    // The keyboard is open while typing a note: Save stays on screen at the
+    // top, above the keyboard.
+    await tester.scrollUntilVisible(
+      find.widgetWithText(TextField, 'Other notes'),
+      200,
+      scrollable: list,
+    );
+    await tester.tap(find.widgetWithText(TextField, 'Other notes'));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Other notes'),
+      'Props replaced',
+    );
+    await tester.pumpAndSettle();
+    final save = find.byKey(const Key('save-check'));
+    expect(save.hitTestable(), findsOneWidget);
+    final screenHeight =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    expect(tester.getBottomLeft(save).dy, lessThan(screenHeight / 3));
+
+    await tester.tap(save);
     await tester.pumpAndSettle();
     expect(find.text('Ready to fly'), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-save-check')));
     await tester.pumpAndSettle();
     expect(db.rows(Tables.dailyChecksFb3).single['storage'], 'Ok');
+    expect(db.rows(Tables.dailyChecksFb3).single['notes'], 'Props replaced');
   });
 
   testWidgets('Statistic fills the phone width with two tiles a row', (
@@ -189,5 +210,59 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('1 aborted', findRichText: true), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('with the keyboard open the Active switch stays in view', (
+    tester,
+  ) async {
+    phone(tester);
+    final db = LocalDb.inMemory();
+    db.setSetting(SyncService.adminKey, '1');
+    final anna = db.save(Tables.people, {
+      'name': 'Anna',
+      'roles': 'pilot',
+      'email': 'anna@example.com',
+      'active': 1,
+    });
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    await open(tester, 'Reference data');
+    await tester.tap(find.text('Anna'));
+    await tester.pumpAndSettle();
+
+    // The keyboard takes the lower ~40% of the screen.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 950);
+    await tester.pumpAndSettle();
+    final visibleBottom = (2340 - 950) / 2.75;
+    final active = find.byKey(const Key('reference-active'));
+    expect(tester.getRect(active).bottom, lessThan(visibleBottom));
+    await tester.tap(active);
+    await tester.pumpAndSettle();
+    // Everything else is reached by scrolling, also the viewer role.
+    final viewer = find.byKey(const Key('role-viewer'));
+    await tester.ensureVisible(viewer);
+    await tester.pumpAndSettle();
+    await tester.tap(viewer);
+    await tester.pumpAndSettle();
+    final save = find.text('Save');
+    expect(tester.getRect(save).bottom, lessThan(visibleBottom));
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final row = db.rows(Tables.people).singleWhere((r) => r['id'] == anna);
+    expect(row['active'], 0);
+    expect(row['roles'], 'pilot,viewer');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a viewer sees the logbooks but no add buttons', (tester) async {
+    phone(tester);
+    final db = LocalDb.inMemory();
+    db.setSetting(SyncService.readOnlyKey, '1');
+    await tester.pumpWidget(PilotLogbookApp(db: db));
+    expect(find.text('Add'), findsNothing);
+    await open(tester, 'Fault Repair');
+    expect(find.text('Report fault'), findsNothing);
+    await open(tester, 'Settings');
+    expect(find.byKey(const Key('access-level')), findsOneWidget);
+    expect(find.textContaining('read only'), findsOneWidget);
   });
 }

@@ -335,101 +335,124 @@ class _DailyCheckScreenState extends State<DailyCheckScreen> {
           ),
         ),
       ),
-      body: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 680),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
-            children: [
-              _Label('Pilot · $_checkedAt'),
-              _Chips(
-                options: pilots,
-                selected: _pilotId,
-                empty: 'Add pilots under Reference data',
-                onSelected: (id) => setState(() => _pilotId = id),
-              ),
-              const SizedBox(height: 14),
-              const _Label('Drone'),
-              if (widget.check != null)
-                Text(droneName ?? '', style: theme.textTheme.titleMedium)
-              else
-                _Chips(
-                  options: drones,
-                  selected: _aircraftId,
-                  mono: true,
-                  empty: 'Add drones under Reference data',
-                  onSelected: (id) => _pickDrone(id, db),
-                ),
-              const SizedBox(height: 14),
-              if (problems.isNotEmpty) ...[
-                _PreviousProblems(problems: problems, drone: droneName ?? ''),
-                const SizedBox(height: 14),
-              ],
-              if (checklist == null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Text(
-                    'Pick the drone to see its checklist.',
-                    style: theme.textTheme.bodyLarge,
-                    textAlign: TextAlign.center,
-                  ),
-                )
-              else ...[
-                ...sectionWidgets.expand(
-                  (w) => [w, const SizedBox(height: 12)],
-                ),
-                TextField(
-                  controller: _generalNotes,
-                  decoration: const InputDecoration(labelText: 'Other notes'),
-                  maxLines: 2,
-                ),
-              ],
-            ],
+      // Save sits at the top, under the title bar, so it stays reachable
+      // while the phone keyboard is open for a note.
+      body: Column(
+        children: [
+          _SaveBar(
+            label: complete
+                ? 'Review & save'
+                : checklist == null
+                ? 'Pick the drone'
+                : _pilotId == null
+                ? 'Pick the pilot'
+                : '$done / ${sections.length} sections',
+            onPressed: complete ? () => _save(checklist) : null,
           ),
-        ),
-      ),
-      // While typing a note on a phone the keyboard needs the room.
-      bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0
-          ? null
-          : SafeArea(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerLow,
-                  border: Border(
-                    top: BorderSide(color: theme.colorScheme.outlineVariant),
-                  ),
-                ),
-                padding: const EdgeInsets.all(12),
-                child: Center(
-                  heightFactor: 1,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 680),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: FilledButton(
-                        key: const Key('save-check'),
-                        onPressed: complete ? () => _save(checklist) : null,
-                        child: Text(
-                          complete
-                              ? 'Review & save'
-                              : checklist == null
-                              ? 'Pick the drone'
-                              : _pilotId == null
-                              ? 'Pick the pilot'
-                              : '$done / ${sections.length} sections',
-                          style: const TextStyle(
-                            fontFamily: 'Barlow Condensed',
-                            fontSize: 22,
-                          ),
-                        ),
-                      ),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
+                  children: [
+                    _Label('Pilot · $_checkedAt'),
+                    _Chips(
+                      options: pilots,
+                      selected: _pilotId,
+                      empty: 'Add pilots under Reference data',
+                      onSelected: (id) => setState(() => _pilotId = id),
                     ),
-                  ),
+                    const SizedBox(height: 14),
+                    const _Label('Drone'),
+                    if (widget.check != null)
+                      Text(droneName ?? '', style: theme.textTheme.titleMedium)
+                    else
+                      _Chips(
+                        options: drones,
+                        selected: _aircraftId,
+                        mono: true,
+                        empty: 'Add drones under Reference data',
+                        onSelected: (id) => _pickDrone(id, db),
+                      ),
+                    const SizedBox(height: 14),
+                    if (problems.isNotEmpty) ...[
+                      _PreviousProblems(
+                        problems: problems,
+                        drone: droneName ?? '',
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (checklist == null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Text(
+                          'Pick the drone to see its checklist.',
+                          style: theme.textTheme.bodyLarge,
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    else ...[
+                      ...sectionWidgets.expand(
+                        (w) => [w, const SizedBox(height: 12)],
+                      ),
+                      TextField(
+                        controller: _generalNotes,
+                        decoration: const InputDecoration(
+                          labelText: 'Other notes',
+                        ),
+                        maxLines: 2,
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SaveBar extends StatelessWidget {
+  const _SaveBar({required this.label, required this.onPressed});
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        border: Border(
+          bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Center(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: FilledButton(
+              key: const Key('save-check'),
+              onPressed: onPressed,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -495,11 +518,7 @@ class _Chips extends StatelessWidget {
                 e.value,
                 textAlign: TextAlign.center,
                 style: mono
-                    ? const TextStyle(
-                        fontFamily: 'Barlow',
-                        fontSize: 19,
-                        fontWeight: FontWeight.w700,
-                      )
+                    ? const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)
                     : null,
               ),
             ),
@@ -785,8 +804,8 @@ class _ResultButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const text = TextStyle(
-      fontFamily: 'Barlow',
-      fontSize: 17,
+      fontFamily: 'Inter',
+      fontSize: 16,
       fontWeight: FontWeight.w700,
     );
     const size = Size(0, 52);

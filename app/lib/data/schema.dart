@@ -45,9 +45,19 @@ class Tables {
     Col('active', ColType.integer),
   ]);
 
+  // Projects (wind farms). Only the admin adds and changes them.
   static const projects = TableDef('projects', [
     Col('name'),
     Col('active', ColType.integer),
+    Col('client'),
+    Col('country'),
+    // One point per line, "lat, lon" or "T01: lat, lon" (see projects.dart).
+    Col('coordinates'),
+    // Own Google Maps link; empty: made from the first point.
+    Col('maps_url'),
+    // The country's drone zone map, pasted by the admin.
+    Col('zone_map_url'),
+    Col('notes'),
   ]);
 
   static const aircraft = TableDef('aircraft', [
@@ -55,6 +65,9 @@ class Tables {
     Col('model'),
     Col('serial'),
     Col('active', ColType.integer),
+    // What the drone flies: "cargo", "inspection" or "cargo,inspection".
+    // Empty (drones from before) counts as both. See DroneUsage.
+    Col('usage'),
   ]);
 
   static const batteries = TableDef('batteries', [
@@ -62,6 +75,8 @@ class Tables {
     Col('set_name'),
     Col('serial'),
     Col('active', ColType.integer),
+    // Drones the battery goes in, comma separated ids; empty = any drone.
+    Col('aircraft_ids'),
   ]);
 
   static const missionTypes = TableDef('mission_types', [
@@ -194,6 +209,40 @@ class Tables {
     Col('repair_id'), // empty for photos of the report
     Col('drive_file_id'),
     Col('url'),
+    // The picture in Cloud Storage for Firebase (photos/<id>.jpg).
+    Col('storage_path'),
+  ]);
+
+  // Maintenance: one row per maintenance of a drone, one column per
+  // assembly with "Checked" or what was done (see maintenance.dart), like
+  // the old AppSheet "Maintenance" sheet.
+  // A row with battery_id (and no aircraft_id) is the Power System
+  // maintenance of that battery set: batteries move between drones.
+  static const maintenance = TableDef('maintenance', [
+    Col('performed_at'), // yyyy-MM-dd HH:mm:ss, local time
+    Col('aircraft_id'),
+    Col('technician_id'),
+    Col('arm_assembly'),
+    Col('center_plate'),
+    Col('propulsion_system'),
+    Col('load_assembly'),
+    Col('leg_assembly'),
+    Col('power_system'),
+    Col('fts'),
+    Col('notes'),
+    Col('battery_id'),
+  ]);
+
+  // How often each maintenance assembly is due, whichever comes first.
+  // Rows override the maintenance book's intervals (maintenance.dart):
+  // model empty = every drone, else drones whose model is this one. A row
+  // with all three empty turns the reminder off. Only the admin changes it.
+  static const maintenanceIntervals = TableDef('maintenance_intervals', [
+    Col('model'),
+    Col('section'), // maintenance column, e.g. arm_assembly
+    Col('hours', ColType.real),
+    Col('flights', ColType.integer),
+    Col('days', ColType.integer),
   ]);
 
   static const torqueSpecs = TableDef('torque_specs', [
@@ -203,10 +252,37 @@ class Tables {
     Col('notes'),
   ]);
 
-  static const documents = TableDef('documents', [
-    Col('title'),
+  // A person's licences, trainings, medicals and insurance. Only that
+  // person (own key) and the admin get, add and change them; only the admin
+  // marks one verified, and the person's own change clears it again. No
+  // scans in the app: url is a link to the document in Google Drive.
+  static const competencies = TableDef('competencies', [
+    Col('person_id'),
+    Col('type'), // e.g. GWO, Medical, see competencyTypes
+    Col('number'),
+    Col('issued_on'), // yyyy-MM-dd
+    Col('expires_on'), // yyyy-MM-dd, empty = does not expire
     Col('url'),
     Col('notes'),
+    Col('verified', ColType.integer), // 1 = the admin checked the document
+    Col('verified_by'), // people id, empty for the master admin key
+  ]);
+
+  // Documents every pilot needs. Only the admin link adds, changes and
+  // deletes them. The file is in Google Drive; each app keeps a copy for
+  // offline use (see documents.dart).
+  static const documents = TableDef('documents', [
+    Col('title'),
+    Col('url'), // the file in Drive, or any web page
+    Col('notes'),
+    Col('drive_file_id'),
+    Col('file_name'),
+    Col('mime_type'),
+    Col('size_bytes', ColType.integer),
+    // Drive's last change of the file; a new one makes apps download again.
+    Col('file_version'),
+    // The file in Cloud Storage for Firebase (documents/<folder>/<name>).
+    Col('storage_path'),
   ]);
 
   static const all = [
@@ -226,9 +302,16 @@ class Tables {
     faultRepairs,
     faultSignoffs,
     faultPhotos,
+    maintenance,
+    maintenanceIntervals,
     torqueSpecs,
+    competencies,
     documents,
   ];
+
+  /// Tables of one person's own rows (person_id): the script gives each
+  /// person only theirs, the admin everyone's. See PERSONAL_TABLES in Code.gs.
+  static const personal = [competencies];
 
   static TableDef byName(String name) => all.firstWhere((t) => t.name == name);
 }

@@ -108,8 +108,8 @@ void main() {
       rows: many,
       filters: 'Drone: 18',
       summary: ['600 flights'],
-      regular: font('Barlow-Regular'),
-      bold: font('Barlow-SemiBold'),
+      regular: font('Inter-Regular'),
+      bold: font('Inter-SemiBold'),
     );
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     final pages = RegExp(r'/Type\s*/Page[^s]')
@@ -192,8 +192,8 @@ void main() {
         const StatsSection('Drones', []),
       ],
       filters: 'Project: Statkraft',
-      regular: font('Barlow-Regular'),
-      bold: font('Barlow-SemiBold'),
+      regular: font('Inter-Regular'),
+      bold: font('Inter-SemiBold'),
     );
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     final pages = RegExp(r'/Type\s*/Page[^s]')
