@@ -4,10 +4,13 @@ import 'package:intl/intl.dart';
 import '../data/competencies.dart';
 import '../data/local_db.dart';
 import '../data/logbook.dart';
+import '../data/projects.dart';
 import '../data/schema.dart';
+import '../data/weather.dart';
 import 'services.dart';
 import 'theme.dart';
 import 'time_picker.dart';
+import 'weather_card.dart';
 
 Future<void> showFlightForm(
   BuildContext context, {
@@ -190,6 +193,7 @@ class _FlightFormState extends State<FlightForm> {
                   value: _v['project_id'] as String?,
                   onChanged: (id) => setState(() => _v['project_id'] = id),
                 ),
+                ?_weather(context),
                 // Only drones marked for this logbook under Reference data.
                 _ChoiceField(
                   label: 'Drone',
@@ -284,6 +288,34 @@ class _FlightFormState extends State<FlightForm> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The forecast of the project's place, for a flight of today. Hidden
+  /// for older flights and for projects without coordinates.
+  Widget? _weather(BuildContext context) {
+    final services = Services.of(context);
+    final weather = services.weather;
+    final projectId = _v['project_id'] as String?;
+    if (weather == null || projectId == null) return null;
+    if (_v['date'] != _dateFormat.format(weather.now())) return null;
+    final row = services.db.byId(Tables.projects, projectId);
+    if (row == null) return null;
+    final project = Project(row);
+    final point = weatherPoint(project);
+    if (point == null) return null;
+    final droneId = _v['aircraft_id'] as String?;
+    final drone = droneId == null
+        ? null
+        : services.db.byId(Tables.aircraft, droneId);
+    return WeatherCard(
+      service: weather,
+      point: point,
+      place: point.label.isEmpty
+          ? project.name
+          : '${project.name} (${point.label})',
+      limits: WeatherLimits.of(drone),
+      droneName: drone?['name'] as String?,
     );
   }
 

@@ -68,6 +68,10 @@ class Tables {
     // What the drone flies: "cargo", "inspection" or "cargo,inspection".
     // Empty (drones from before) counts as both. See DroneUsage.
     Col('usage'),
+    // Weather limits in m/s for the flight form's weather card; empty:
+    // the defaults in WeatherLimits (10 and 12).
+    Col('max_wind_ms'),
+    Col('max_gust_ms'),
   ]);
 
   static const batteries = TableDef('batteries', [

@@ -6,6 +6,7 @@ import '../data/notifications.dart';
 import '../data/push.dart';
 import '../data/sync/sync_service.dart';
 import '../data/update_check.dart';
+import '../data/weather.dart';
 
 /// Hands the database, queries and sync to every screen.
 class Services extends InheritedWidget {
@@ -17,6 +18,7 @@ class Services extends InheritedWidget {
     required this.theme,
     this.updates,
     this.push,
+    this.weather,
     required super.child,
   });
 
@@ -40,6 +42,8 @@ class Services extends InheritedWidget {
     admin: sync.isAdmin,
     viewer: sync.readOnly,
   );
+  /// Forecasts for the flight form (none: the weather card is hidden).
+  final WeatherService? weather;
 
   static Services of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Services>()!;
@@ -59,7 +63,8 @@ class Services extends InheritedWidget {
       sync != oldWidget.sync ||
       theme != oldWidget.theme ||
       updates != oldWidget.updates ||
-      push != oldWidget.push;
+      push != oldWidget.push ||
+      weather != oldWidget.weather;
 }
 
 /// Rebuilds [builder] whenever the local database or the sync state (such

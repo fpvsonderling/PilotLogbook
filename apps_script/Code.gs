@@ -24,7 +24,7 @@
 const SCHEMA = {
   people: ['name', 'roles', 'email', 'active'],
   projects: ['name', 'active', 'client', 'country', 'coordinates', 'maps_url', 'zone_map_url', 'notes'],
-  aircraft: ['name', 'model', 'serial', 'active', 'usage'],
+  aircraft: ['name', 'model', 'serial', 'active', 'usage', 'max_wind_ms', 'max_gust_ms'],
   batteries: ['name', 'set_name', 'serial', 'active', 'aircraft_ids'],
   mission_types: ['name', 'active'],
   flights: ['date', 'kind', 'project_id', 'aircraft_id', 'battery_id', 'takeoff_at', 'landing_at', 'duration_s', 'battery_pct', 'used', 'temp_c', 'mission', 'rp_id', 'pa_id', 'spotter_id', 'notes', 'aborted', 'near_miss'],
