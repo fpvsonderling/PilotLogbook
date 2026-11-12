@@ -285,6 +285,31 @@ class Tables {
     Col('storage_path'),
   ]);
 
+  // What push notifications a person wants (one row per person, id
+  // "notify-<person_id>"; the master admin key uses person_id "master").
+  // Only that person and the admin read and change it. 1 = on. No row: an
+  // admin gets everything, anyone else nothing. aircraft_ids: the person's
+  // drones ("My drones"), comma separated; the admin gets every drone.
+  static const notifySettings = TableDef('notify_settings', [
+    Col('person_id'),
+    Col('faults', ColType.integer), // new fault on my drones
+    Col('repairs', ColType.integer), // repaired, waiting for the test
+    Col('maintenance', ColType.integer), // drone or battery set due
+    Col('competencies', ColType.integer), // my own expiring
+    Col('team_competencies', ColType.integer), // admin: everyone's
+    Col('aircraft_ids'),
+  ]);
+
+  // Phones that get push notifications: one row per app installation,
+  // with its Firebase Cloud Messaging token. Only that person and the
+  // admin see it; Code.gs sendNotifications() sends to these.
+  static const pushDevices = TableDef('push_devices', [
+    Col('person_id'),
+    Col('token'),
+    Col('platform'), // android | ios
+    Col('device_name'),
+  ]);
+
   static const all = [
     people,
     projects,
@@ -307,11 +332,13 @@ class Tables {
     torqueSpecs,
     competencies,
     documents,
+    notifySettings,
+    pushDevices,
   ];
 
   /// Tables of one person's own rows (person_id): the script gives each
   /// person only theirs, the admin everyone's. See PERSONAL_TABLES in Code.gs.
-  static const personal = [competencies];
+  static const personal = [competencies, notifySettings, pushDevices];
 
   static TableDef byName(String name) => all.firstWhere((t) => t.name == name);
 }

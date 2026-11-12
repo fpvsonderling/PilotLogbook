@@ -9,6 +9,7 @@ import 'faults_page.dart';
 import 'flights_page.dart';
 import 'maintenance_page.dart';
 import 'nm_page.dart';
+import 'notifications_ui.dart';
 import 'projects_page.dart';
 import 'reference_page.dart';
 import 'services.dart';
@@ -55,6 +56,34 @@ class _HomePageState extends State<HomePage> {
 
   Widget _page() => _pages[_index].$3();
 
+  ValueNotifier<String?>? _openPage;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final open = Services.of(context).push?.openPage;
+    if (open != _openPage) {
+      _openPage?.removeListener(_openFromNotification);
+      _openPage = open?..addListener(_openFromNotification);
+      _openFromNotification();
+    }
+  }
+
+  @override
+  void dispose() {
+    _openPage?.removeListener(_openFromNotification);
+    super.dispose();
+  }
+
+  /// A tapped notification opens its page.
+  void _openFromNotification() {
+    final label = _openPage?.value;
+    if (label == null) return;
+    _openPage!.value = null;
+    final i = pageIndex(label);
+    if (i >= 0 && mounted) setState(() => _index = i);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Phones get a drawer; wider windows keep the rail always visible.
@@ -64,6 +93,9 @@ class _HomePageState extends State<HomePage> {
         title: Text(narrow ? _pages[_index].$2 : 'Pilot Logbook'),
         actions: [
           _AlertCounts(
+            onOpen: (label) => setState(() => _index = pageIndex(label)),
+          ),
+          NotificationBell(
             onOpen: (label) => setState(() => _index = pageIndex(label)),
           ),
           const SyncButton(),

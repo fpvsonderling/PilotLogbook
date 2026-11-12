@@ -862,3 +862,120 @@ test('mirrorFromFirebase writes Firestore back into the tabs', () => {
   assert.strictEqual(sheet.cells[1][header.indexOf('notes')], 'from firebase');
   assert.strictEqual(sheet.cells[1][header.indexOf('server_seq')], String(Date.parse('2026-11-08T10:00:00Z')));
 });
+
+// ------------------------------------------------------ push notifications
+
+function notifyData() {
+  return {
+    people: [
+      { id: 'p-boss', name: 'Pavlo', roles: 'admin' },
+      { id: 'p-anna', name: 'Anna', roles: 'pilot' },
+      { id: 'p-tom', name: 'Tom', roles: 'pilot' },
+      { id: 'p-view', name: 'Viewer', roles: 'viewer' },
+    ],
+    aircraft: [
+      { id: 'a19', name: '19', model: 'FB3' },
+      { id: 'a24', name: '24', model: 'FB3' },
+    ],
+    batteries: [{ id: 'b42', name: '42', aircraft_ids: 'a24' }],
+    notify_settings: [
+      // Anna wants faults and maintenance of drone 19; Tom set nothing.
+      { id: 'notify-p-anna', person_id: 'p-anna', faults: '1', maintenance: '1', competencies: '1', aircraft_ids: 'a19' },
+    ],
+    push_devices: [
+      { id: 'd1', person_id: 'p-boss', token: 'tok-boss' },
+      { id: 'd2', person_id: 'p-anna', token: 'tok-anna' },
+      { id: 'd3', person_id: 'p-tom', token: 'tok-tom' },
+      { id: 'd4', person_id: 'p-view', token: 'tok-view' },
+    ],
+    faults: [],
+    fault_repairs: [],
+    fault_signoffs: [],
+    flights: [],
+    maintenance: [],
+    maintenance_intervals: [],
+    competencies: [],
+  };
+}
+
+const whoGot = (out) => Array.from(out.messages, (m) => m.person + ': ' + m.title).sort();
+const none = (out) => assert.strictEqual(out.messages.length, 0);
+
+test('push: the first run only remembers faults, then each new one goes once', () => {
+  const { ctx } = load();
+  const data = notifyData();
+  data.faults.push({ id: 'f-old', aircraft_id: 'a19', description: 'old', discovered_by_id: 'p-tom' });
+  let out = ctx.buildNotifications_(data, {}, { today: '2026-11-12', daily: false, now: '2026-11-12T08:00:00Z' });
+  none(out);
+
+  data.faults.push({ id: 'f19', aircraft_id: 'a19', severity: '2', description: 'cracked arm', discovered_by_id: 'p-tom' });
+  data.faults.push({ id: 'f24', aircraft_id: 'a24', severity: '3', description: 'GPS', discovered_by_id: 'p-tom' });
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-12', daily: false, now: '2026-11-12T08:10:00Z' });
+  // Admin: every drone. Anna: only drone 19. Tom reported them; viewer nothing.
+  // The master key has no phone, so nothing goes to it.
+  assert.deepStrictEqual(whoGot(out), [
+    'p-anna: New fault: drone 19',
+    'p-boss: Grounded: drone 24',
+    'p-boss: New fault: drone 19',
+  ]);
+  assert.strictEqual(out.messages.find((m) => m.person === 'p-anna').body, 'Tom: cracked arm');
+
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-12', daily: false, now: '2026-11-12T08:20:00Z' });
+  none(out);
+});
+
+test('push: a repair goes to the reporter and the admin, if they want repairs', () => {
+  const { ctx } = load();
+  const data = notifyData();
+  data.notify_settings.push({ id: 'notify-p-tom', person_id: 'p-tom', repairs: '1' });
+  data.faults.push({ id: 'f19', aircraft_id: 'a19', description: 'arm', discovered_by_id: 'p-tom' });
+  let out = ctx.buildNotifications_(data, {}, { today: '2026-11-12', daily: false, now: '2026-11-12T08:00:00Z' });
+  data.fault_repairs.push({ id: 'r1', fault_id: 'f19', started_at: '2026-11-12 09:00:00' });
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-12', daily: false, now: '2026-11-12T08:10:00Z' });
+  none(out); // not finished yet
+  data.fault_repairs[0].finished_at = '2026-11-12 10:00:00';
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-12', daily: false, now: '2026-11-12T08:20:00Z' });
+  assert.deepStrictEqual(whoGot(out), [
+    'p-boss: Repaired, waiting for the test: drone 19',
+    'p-tom: Repaired, waiting for the test: drone 19',
+  ]);
+});
+
+test('push: maintenance due once a day, once per level, only for my drones', () => {
+  const { ctx } = load();
+  const data = notifyData();
+  // Drone 19: 9 h flown, Propulsion (10 h) due soon. Battery set 42 on drone 24.
+  for (let i = 0; i < 9; i++) data.flights.push({ id: 'fl' + i, date: '2026-11-0' + (i + 1), aircraft_id: 'a19', battery_id: 'b42', duration_s: '3600' });
+  const state = { since: '2026-11-12T06:00:00Z' };
+  let out = ctx.buildNotifications_(data, state, { today: '2026-11-12', daily: true, now: '2026-11-12T07:00:00Z' });
+  const anna = out.messages.find((m) => m.person === 'p-anna');
+  // Propulsion and Load (10 h each) are at 90 %.
+  assert.strictEqual(anna.title, '2 reminders');
+  assert.strictEqual(anna.body, 'Maintenance due soon: Drone 19\nMaintenance due soon: Drone 19');
+  // The admin gets drone 19's two assemblies and the battery set at once.
+  const boss = out.messages.find((m) => m.person === 'p-boss');
+  assert.strictEqual(boss.title, '3 reminders');
+  assert.match(boss.body, /Battery set 42/);
+  assert.ok(!out.messages.some((m) => m.person === 'p-tom' || m.person === 'p-view'));
+
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-13', daily: true, now: '2026-11-13T07:00:00Z' });
+  none(out); // nothing new
+  data.flights.push({ id: 'fl9', date: '2026-11-13', aircraft_id: 'a19', duration_s: '7200' });
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-14', daily: true, now: '2026-11-14T07:00:00Z' });
+  assert.match(out.messages.find((m) => m.person === 'p-anna').body, /^Maintenance overdue: Drone 19/);
+});
+
+test('push: competencies 30, 7 and 0 days before, own for the pilot, everyone for the admin', () => {
+  const { ctx } = load();
+  const data = notifyData();
+  data.competencies.push({ id: 'c1', person_id: 'p-anna', type: 'GWO', expires_on: '2026-11-19' });
+  data.competencies.push({ id: 'c2', person_id: 'p-tom', type: 'Medical', expires_on: '2026-12-12' });
+  data.competencies.push({ id: 'c3', person_id: 'p-tom', type: 'A2', expires_on: '2026-12-01' });
+  const out = ctx.buildNotifications_(data, { since: 'x' }, { today: '2026-11-12', daily: true, now: '2026-11-12T07:00:00Z' });
+  assert.deepStrictEqual(whoGot(out), [
+    'p-anna: Your GWO expires in 7 days',
+    'p-boss: 2 reminders',
+  ]);
+  assert.strictEqual(out.messages.find((m) => m.person === 'p-boss').body, 'Anna: GWO expires in 7 days\nTom: Medical expires in 30 days');
+});
+

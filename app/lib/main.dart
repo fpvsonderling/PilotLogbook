@@ -8,6 +8,7 @@ import 'data/documents.dart';
 import 'data/local_db.dart';
 import 'data/logbook.dart';
 import 'data/photos.dart';
+import 'data/push.dart';
 import 'data/sync/sync_service.dart';
 import 'data/update_check.dart';
 import 'ui/home.dart';
@@ -30,7 +31,13 @@ Future<void> main() async {
 }
 
 class PilotLogbookApp extends StatefulWidget {
-  const PilotLogbookApp({super.key, required this.db, this.sync, this.updates});
+  const PilotLogbookApp({
+    super.key,
+    required this.db,
+    this.sync,
+    this.updates,
+    this.push = true,
+  });
 
   final LocalDb db;
 
@@ -39,6 +46,9 @@ class PilotLogbookApp extends StatefulWidget {
 
   /// Injected in tests; checks GitHub for [appVersion] otherwise.
   final UpdateChecker? updates;
+
+  /// False in tests: no system notifications or Firebase push.
+  final bool push;
 
   @override
   State<PilotLogbookApp> createState() => _PilotLogbookAppState();
@@ -58,10 +68,15 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
     ThemeChoice.store(_theme.value),
   );
 
+  late final PushService? _push = widget.push
+      ? PushService(widget.db, _sync)
+      : null;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _push?.start();
     _sync.sync();
     _updates.check();
     // A window left open for days still learns about a new version.
@@ -78,6 +93,7 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _push?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _theme.dispose();
     super.dispose();
@@ -101,6 +117,7 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
       sync: _sync,
       theme: _theme,
       updates: _updates,
+      push: _push,
       child: ValueListenableBuilder(
         valueListenable: _theme,
         builder: (context, mode, _) => MaterialApp(

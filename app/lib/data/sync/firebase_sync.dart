@@ -141,7 +141,7 @@ class FirebaseSync {
       if (r['server_seq'] == null) {
         out['created_by'] = a.me.isEmpty ? null : a.me;
       }
-      if (Tables.personal.contains(t)) {
+      if (t == Tables.competencies) {
         out['verified'] = null;
         out['verified_by'] = null;
       }
