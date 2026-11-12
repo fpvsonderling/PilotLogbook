@@ -66,13 +66,20 @@ class _ReferenceList extends StatelessWidget {
   /// and a battery's drones.
   static const _chipColumns = {'roles', 'usage', 'aircraft_ids'};
 
+  /// A drone's weather limits, typed as numbers (see WeatherLimits).
+  static const _limitLabels = {
+    'max_wind_ms': 'Max wind m/s (weather check, empty: 10)',
+    'max_gust_ms': 'Max gusts m/s (weather check, empty: 12)',
+  };
+
   /// Text columns shown under the name, e.g. model and serial for drones.
   List<String> get _details => [
     for (final c in table.columns)
       if (c.type == ColType.text &&
           c.name != 'name' &&
           c.name != 'usage' &&
-          c.name != 'aircraft_ids')
+          c.name != 'aircraft_ids' &&
+          !_limitLabels.containsKey(c.name))
         c.name,
   ];
 
@@ -179,8 +186,14 @@ class _ReferenceList extends StatelessWidget {
                         controller: e.value,
                         autofocus: e.key == 'name' && row == null,
                         textInputAction: TextInputAction.next,
+                        keyboardType: _limitLabels.containsKey(e.key)
+                            ? const TextInputType.numberWithOptions(
+                                decimal: true,
+                              )
+                            : null,
                         decoration: InputDecoration(
-                          labelText: e.key.replaceAll('_', ' '),
+                          labelText:
+                              _limitLabels[e.key] ?? e.key.replaceAll('_', ' '),
                         ),
                       ),
                     ),
