@@ -88,7 +88,9 @@ class _WeatherCardState extends State<WeatherCard> {
         child: ListTile(
           leading: Icon(Icons.cloud_off, color: scheme.onSurfaceVariant),
           title: Text(
-            _loading ? 'Loading weather…' : 'No weather: no connection',
+            _loading
+                ? 'Loading weather…'
+                : 'No weather: ${widget.service.lastError ?? 'no connection'}',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
           subtitle: Text(widget.place),
@@ -229,9 +231,13 @@ class _WeatherCardState extends State<WeatherCard> {
                   Expanded(
                     child: _Tile(
                       label: 'Gusts m/s',
-                      value: n(hour.gust),
-                      sub: 'max ${WeatherLimits.fmt(limits.gust)}',
-                      color: level(hour.gust, limits.gust),
+                      value: hour.gustEstimated
+                          ? '≈${n(hour.gustShown)}'
+                          : n(hour.gustShown),
+                      sub: hour.gustEstimated
+                          ? 'est. · max ${WeatherLimits.fmt(limits.gust)}'
+                          : 'max ${WeatherLimits.fmt(limits.gust)}',
+                      color: level(hour.gustShown, limits.gust),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -269,7 +275,9 @@ class _WeatherCardState extends State<WeatherCard> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Next hours · wind / gusts m/s',
+              hour.gustEstimated
+                  ? 'Next hours · wind / gusts m/s (≈ estimate, no gust forecast here)'
+                  : 'Next hours · wind / gusts m/s',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 6),
@@ -283,7 +291,7 @@ class _WeatherCardState extends State<WeatherCard> {
                         hour: h,
                         windColor: level(h.wind, limits.wind),
                         gustColor: level(
-                          h.gust,
+                          h.gustShown,
                           limits.gust,
                         ).withValues(alpha: 0.45),
                         rain: (h.rain ?? 0) > 0,
@@ -424,13 +432,13 @@ class _HourBar extends StatelessWidget {
             children: [
               _bar(hour.wind, windColor),
               const SizedBox(width: 2),
-              _bar(hour.gust, gustColor),
+              _bar(hour.gustShown, gustColor),
             ],
           ),
         ),
         const SizedBox(height: 2),
         Text(
-          '${r(hour.wind)}/${r(hour.gust)}',
+          '${r(hour.wind)}/${hour.gustEstimated ? '≈' : ''}${r(hour.gustShown)}',
           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
         ),
         rain

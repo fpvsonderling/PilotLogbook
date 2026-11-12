@@ -53,6 +53,7 @@ class PilotLogbookApp extends StatefulWidget {
 
   /// False in tests: no system notifications or Firebase push.
   final bool push;
+
   /// Injected in tests; fetches from MET Norway otherwise.
   final WeatherService? weather;
 

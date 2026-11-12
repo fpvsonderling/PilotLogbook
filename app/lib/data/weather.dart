@@ -4,10 +4,14 @@
 /// hours ahead), so it can still be shown without internet.
 library;
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import 'local_db.dart';
 import 'projects.dart';
@@ -52,6 +56,17 @@ class WeatherHour {
 
   /// Relative humidity, %.
   final double? humidity;
+
+  /// Gusts are about this many times the mean wind over land. Used only
+  /// when the forecast has no gusts: MET Norway gives them for the Nordic
+  /// countries only, so e.g. Spain comes without.
+  static const gustFactor = 1.4;
+
+  /// The gusts to show: the forecast's, else an estimate from the wind.
+  double? get gustShown => gust ?? (wind == null ? null : wind! * gustFactor);
+
+  /// [gustShown] is an estimate from the wind, not a forecast.
+  bool get gustEstimated => gust == null && wind != null;
 
   Map<String, Object?> toJson() => {
     't': time.toIso8601String(),
@@ -273,7 +288,10 @@ class WeatherLimits {
   /// What is over the limits in [h] (and [kpNow]); empty when all is fine.
   List<String> problems(WeatherHour h, double? kpNow) => [
     if ((h.wind ?? 0) > wind) 'Wind above ${fmt(wind)} m/s',
-    if ((h.gust ?? 0) > gust) 'Gusts above ${fmt(gust)} m/s',
+    if ((h.gustShown ?? 0) > gust)
+      h.gustEstimated
+          ? 'Gusts (est.) above ${fmt(gust)} m/s'
+          : 'Gusts above ${fmt(gust)} m/s',
     if ((h.rain ?? 0) > rain) 'Rain',
     if ((kpNow ?? 0) >= kp) 'Kp ${fmt(kpNow!)}: GPS may be poor',
   ];
@@ -290,11 +308,12 @@ class WeatherService {
     http.Client? client,
     DateTime Function()? clock,
     this.freshFor = const Duration(minutes: 30),
-  }) : _client = client ?? http.Client(),
+  }) : _given = client,
        _clock = clock ?? DateTime.now;
 
   final LocalDb db;
-  final http.Client _client;
+  final http.Client? _given;
+  http.Client? _made;
   final DateTime Function() _clock;
 
   /// A forecast younger than this is not fetched again.
@@ -317,6 +336,45 @@ class WeatherService {
 
   DateTime now() => _clock();
 
+  /// Why the last fetch failed, in a few words; null when it worked.
+  String? lastError;
+
+  /// Windows only trusts the root certificates it has already fetched for
+  /// some other program, and Dart does not ask it to fetch more. MET
+  /// Norway's certificate (HARICA) is often not among them, so on Windows
+  /// the app brings its own list of roots (Mozilla's, as in curl and
+  /// Firefox) on top of the system ones.
+  Future<http.Client> _client() async {
+    final given = _given;
+    if (given != null) return given;
+    final made = _made;
+    if (made != null) return made;
+    http.Client client = http.Client();
+    if (Platform.isWindows) {
+      try {
+        final pem = await rootBundle.load('assets/certs/cacert.pem');
+        final context = SecurityContext(withTrustedRoots: true)
+          ..setTrustedCertificatesBytes(pem.buffer.asUint8List());
+        client = IOClient(HttpClient(context: context));
+      } catch (_) {
+        // Without the list: the system roots only.
+      }
+    }
+    return _made = client;
+  }
+
+  /// "certificate", "timeout", "HTTP 403": what went wrong, for the card.
+  static String describe(Object e) => switch (e) {
+    HandshakeException() || TlsException() => 'certificate error',
+    TimeoutException() => 'timeout',
+    SocketException() => 'no connection',
+    http.ClientException(:final message) =>
+      message.contains('CERTIFICATE') || message.contains('Handshake')
+          ? 'certificate error'
+          : 'no connection',
+    _ => 'error',
+  };
+
   /// The kept forecast of [p], unless it is older than [keepFor].
   WeatherForecast? cached(ProjectPoint p) {
     final f = WeatherForecast.fromJsonString(db.setting(_key(p)));
@@ -337,7 +395,8 @@ class WeatherService {
       return kept;
     }
     try {
-      final response = await _client
+      final client = await _client();
+      final response = await client
           .get(
             Uri.parse(metUrl).replace(
               queryParameters: {
@@ -348,26 +407,35 @@ class WeatherService {
             headers: {'User-Agent': userAgent},
           )
           .timeout(const Duration(seconds: 15));
-      if (response.statusCode != 200) return kept;
+      if (response.statusCode < 200 || response.statusCode > 299) {
+        lastError = 'HTTP ${response.statusCode}';
+        return kept;
+      }
       final hours = parseMetNorway(
         jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
       );
-      if (hours.isEmpty) return kept;
+      if (hours.isEmpty) {
+        lastError = 'empty forecast';
+        return kept;
+      }
       final forecast = WeatherForecast(
         fetchedAt: now(),
         hours: hours,
         kp: await _kp() ?? kept?.kp ?? const {},
       );
       db.setSetting(_key(p), forecast.toJsonString());
+      lastError = null;
       return forecast;
-    } catch (_) {
+    } catch (e) {
+      lastError = describe(e);
       return kept;
     }
   }
 
   Future<Map<DateTime, double>?> _kp() async {
     try {
-      final response = await _client
+      final client = await _client();
+      final response = await client
           .get(Uri.parse(kpUrl), headers: {'User-Agent': userAgent})
           .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) return null;
