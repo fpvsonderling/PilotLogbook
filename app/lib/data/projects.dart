@@ -16,6 +16,16 @@ class ProjectPoint {
   String get mapsUrl =>
       'https://www.google.com/maps/search/?api=1&query=$lat%2C$lon';
 
+  @override
+  bool operator ==(Object other) =>
+      other is ProjectPoint &&
+      other.lat == lat &&
+      other.lon == lon &&
+      other.label == label;
+
+  @override
+  int get hashCode => Object.hash(lat, lon, label);
+
   static String _fixed(double v) {
     var t = v.toStringAsFixed(6);
     t = t.replaceFirst(RegExp(r'0+$'), '');

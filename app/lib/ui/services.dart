@@ -4,6 +4,7 @@ import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/sync/sync_service.dart';
 import '../data/update_check.dart';
+import '../data/weather.dart';
 
 /// Hands the database, queries and sync to every screen.
 class Services extends InheritedWidget {
@@ -14,6 +15,7 @@ class Services extends InheritedWidget {
     required this.sync,
     required this.theme,
     this.updates,
+    this.weather,
     required super.child,
   });
 
@@ -26,6 +28,9 @@ class Services extends InheritedWidget {
 
   /// Tells when a newer app version has been published (none in tests).
   final UpdateChecker? updates;
+
+  /// Forecasts for the flight form (none: the weather card is hidden).
+  final WeatherService? weather;
 
   static Services of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Services>()!;
@@ -44,7 +49,8 @@ class Services extends InheritedWidget {
       db != oldWidget.db ||
       sync != oldWidget.sync ||
       theme != oldWidget.theme ||
-      updates != oldWidget.updates;
+      updates != oldWidget.updates ||
+      weather != oldWidget.weather;
 }
 
 /// Rebuilds [builder] whenever the local database or the sync state (such
