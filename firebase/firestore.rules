@@ -90,7 +90,7 @@ service cloud.firestore {
           'checks', 'check_answers', 'daily_checks_fb3', 'daily_checks_m30t',
           'faults', 'fault_repairs', 'fault_signoffs', 'fault_photos',
           'maintenance', 'maintenance_intervals', 'torque_specs',
-          'competencies', 'documents'];
+          'competencies', 'documents', 'notify_settings', 'push_devices'];
       }
 
       // Only the admin adds to, changes or deletes these.
@@ -100,7 +100,7 @@ service cloud.firestore {
 
       // One person's own rows (person_id): only they and the admin.
       function personal() {
-        return table in ['competencies'];
+        return table in ['competencies', 'notify_settings', 'push_devices'];
       }
 
       allow get, list: if isTable() && valid()

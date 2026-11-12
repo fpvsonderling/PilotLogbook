@@ -8,6 +8,7 @@ import 'data/documents.dart';
 import 'data/local_db.dart';
 import 'data/logbook.dart';
 import 'data/photos.dart';
+import 'data/push.dart';
 import 'data/sync/sync_service.dart';
 import 'data/projects.dart';
 import 'data/schema.dart';
@@ -38,6 +39,7 @@ class PilotLogbookApp extends StatefulWidget {
     required this.db,
     this.sync,
     this.updates,
+    this.push = true,
     this.weather,
   });
 
@@ -49,6 +51,8 @@ class PilotLogbookApp extends StatefulWidget {
   /// Injected in tests; checks GitHub for [appVersion] otherwise.
   final UpdateChecker? updates;
 
+  /// False in tests: no system notifications or Firebase push.
+  final bool push;
   /// Injected in tests; fetches from MET Norway otherwise.
   final WeatherService? weather;
 
@@ -83,10 +87,15 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
     ThemeChoice.store(_theme.value),
   );
 
+  late final PushService? _push = widget.push
+      ? PushService(widget.db, _sync)
+      : null;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _push?.start();
     _sync.addListener(_prefetchWeather);
     _sync.sync();
     _updates.check();
@@ -104,6 +113,7 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _push?.dispose();
     _sync.removeListener(_prefetchWeather);
     WidgetsBinding.instance.removeObserver(this);
     _theme.dispose();
@@ -128,6 +138,7 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
       sync: _sync,
       theme: _theme,
       updates: _updates,
+      push: _push,
       weather: _weather,
       child: ValueListenableBuilder(
         valueListenable: _theme,

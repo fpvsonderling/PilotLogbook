@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../data/local_db.dart';
 import '../data/logbook.dart';
+import '../data/notifications.dart';
+import '../data/push.dart';
 import '../data/sync/sync_service.dart';
 import '../data/update_check.dart';
 import '../data/weather.dart';
@@ -15,6 +17,7 @@ class Services extends InheritedWidget {
     required this.sync,
     required this.theme,
     this.updates,
+    this.push,
     this.weather,
     required super.child,
   });
@@ -29,6 +32,16 @@ class Services extends InheritedWidget {
   /// Tells when a newer app version has been published (none in tests).
   final UpdateChecker? updates;
 
+  /// Push and desktop notifications (none in tests).
+  final PushService? push;
+
+  /// What this key's person wants to be notified about, and the bell.
+  Notifications get notifications => Notifications(
+    db,
+    me: sync.me,
+    admin: sync.isAdmin,
+    viewer: sync.readOnly,
+  );
   /// Forecasts for the flight form (none: the weather card is hidden).
   final WeatherService? weather;
 
@@ -50,6 +63,7 @@ class Services extends InheritedWidget {
       sync != oldWidget.sync ||
       theme != oldWidget.theme ||
       updates != oldWidget.updates ||
+      push != oldWidget.push ||
       weather != oldWidget.weather;
 }
 

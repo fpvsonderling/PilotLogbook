@@ -43,6 +43,8 @@ const SCHEMA = {
   torque_specs: ['model', 'component', 'value_nm', 'notes'],
   competencies: ['person_id', 'type', 'number', 'issued_on', 'expires_on', 'url', 'notes', 'verified', 'verified_by'],
   documents: ['title', 'url', 'notes', 'drive_file_id', 'file_name', 'mime_type', 'size_bytes', 'file_version', 'storage_path'],
+  notify_settings: ['person_id', 'faults', 'repairs', 'maintenance', 'competencies', 'team_competencies', 'aircraft_ids'],
+  push_devices: ['person_id', 'token', 'platform', 'device_name'],
 };
 // SCHEMA-END
 
@@ -55,7 +57,7 @@ const ADMIN_ONLY_TABLES = ['documents', 'maintenance_intervals', 'projects'];
 // Tables of one person's own rows (column person_id): only that person
 // (with their own key) and the admin get them, add, change and delete them;
 // only the admin sets verified.
-const PERSONAL_TABLES = ['competencies'];
+const PERSONAL_TABLES = ['competencies', 'notify_settings', 'push_devices'];
 // Documents go to the app in pieces of this many bytes, so big manuals fit
 // in one answer each.
 const DOCUMENT_PART = 8 * 1024 * 1024;
@@ -1228,7 +1230,7 @@ service cloud.firestore {
           'checks', 'check_answers', 'daily_checks_fb3', 'daily_checks_m30t',
           'faults', 'fault_repairs', 'fault_signoffs', 'fault_photos',
           'maintenance', 'maintenance_intervals', 'torque_specs',
-          'competencies', 'documents'];
+          'competencies', 'documents', 'notify_settings', 'push_devices'];
       }
 
       // Only the admin adds to, changes or deletes these.
@@ -1238,7 +1240,7 @@ service cloud.firestore {
 
       // One person's own rows (person_id): only they and the admin.
       function personal() {
-        return table in ['competencies'];
+        return table in ['competencies', 'notify_settings', 'push_devices'];
       }
 
       allow get, list: if isTable() && valid()
@@ -1611,14 +1613,7 @@ function movedAnswer_(token) {
 function mirrorFromFirebase() {
   const fb = firebaseConfig_();
   Object.keys(SCHEMA).forEach(function (table) {
-    const rows = [];
-    let pageToken = '';
-    do {
-      const page = googleApi_(fb, 'get', 'https://firestore.googleapis.com/v1/' + fb.docs + '/' + table +
-        '?pageSize=300' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''));
-      (page.documents || []).forEach(function (d) { rows.push(plainFields_(d.fields || {})); });
-      pageToken = page.nextPageToken || '';
-    } while (pageToken);
+    const rows = firestoreRows_(fb, table);
     const sheet = ensureSheet_(table, false);
     const header = readHeader_(sheet);
     const values = rows.map(function (r) {
@@ -1659,6 +1654,437 @@ function installFirebaseTriggers() {
     })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('mirrorFromFirebase').timeBased().everyDays(1).atHour(2).create();
+}
+
+// ------------------------------------------------------ push notifications
+//
+// Who gets what (the admin decides nothing here, each person in the app
+// under Settings > Notifications, table notify_settings):
+// - everything is off until the person switches it on, the admin too;
+// - admin (role admin, or the master key as person "master"): for every
+//   drone; anyone else only for the drones they ticked under "My drones";
+// - viewer (read only key): nothing.
+// Phones register in push_devices (Android and iPhone, Firebase Cloud
+// Messaging). Windows and Mac show the same in the app's bell.
+// Each notification goes once: a fault or repair once ever, a
+// maintenance reminder once per level (due soon, overdue), a competency
+// 30, 7 and 0 days before expiry, so nothing repeats on the same day.
+//
+// sendNotifications() runs every 10 minutes (installPushTriggers): new
+// faults and repairs right away, maintenance and competencies once a day
+// at NOTIFY_HOUR. Nothing is sent between NOTIFY_QUIET_FROM and
+// NOTIFY_HOUR; it waits for the morning.
+
+const NOTIFY_HOUR = 7;
+const NOTIFY_QUIET_FROM = 21;
+const NOTIFY_TYPES = ['faults', 'repairs', 'maintenance', 'competencies', 'team_competencies'];
+// Days before a competency's expiry when its person (and the admin) hear of it.
+const COMPETENCY_NOTICE_DAYS = [30, 7, 0];
+const ANDROID_PACKAGE = 'com.pilotlogbook.pilot_logbook';
+const IOS_BUNDLE = 'com.yavorskyi.pilotlogbook';
+
+// Kept equal to bookIntervals and dueSoonShare in app/lib/data/maintenance.dart.
+const BOOK_INTERVALS = {
+  arm_assembly: { hours: 20, days: 182 },
+  center_plate: { hours: 20, days: 182 },
+  propulsion_system: { hours: 10, days: 91 },
+  load_assembly: { hours: 10, days: 91 },
+  leg_assembly: { hours: 20, days: 182 },
+  power_system: { hours: 10, days: 91 },
+  fts: { days: 182 },
+};
+const DUE_SOON_SHARE = 0.8;
+const SECTION_TITLES = {
+  arm_assembly: 'Arm Assembly', center_plate: 'Center Plate', propulsion_system: 'Propulsion System',
+  load_assembly: 'Load Assembly', leg_assembly: 'Leg Assembly', power_system: 'Power System', fts: 'FTS',
+};
+
+/**
+ * Run once after pasting this version: registers the Android and iPhone
+ * apps in Firebase, saves their settings where the app reads them
+ * (meta/config), updates the security rules and starts
+ * sendNotifications() every 10 minutes. Then upload the Apple push key
+ * (APNs) in the Firebase console, see the log.
+ */
+function setupPush() {
+  const fb = firebaseConfig_();
+  const base = 'https://firebase.googleapis.com/v1beta1/projects/' + fb.project;
+  const project = googleApi_(fb, 'get', base);
+  const android = firebaseApp_(fb, base, 'androidApps', 'packageName', ANDROID_PACKAGE);
+  const ios = firebaseApp_(fb, base, 'iosApps', 'bundleId', IOS_BUNDLE);
+  const androidConfig = JSON.parse(Utilities.newBlob(Utilities.base64Decode(
+    googleApi_(fb, 'get', base + '/androidApps/' + android.appId + '/config').configFileContents)).getDataAsString());
+  const iosPlist = Utilities.newBlob(Utilities.base64Decode(
+    googleApi_(fb, 'get', base + '/iosApps/' + ios.appId + '/config').configFileContents)).getDataAsString();
+  const iosKey = (iosPlist.match(/<key>API_KEY<\/key>\s*<string>([^<]*)<\/string>/) || [])[1] || fb.apiKey;
+  const push = {
+    push_sender_id: String(project.projectNumber),
+    push_android_app_id: android.appId,
+    push_android_api_key: ((androidConfig.client || [])[0] || {}).api_key[0].current_key || fb.apiKey,
+    push_ios_app_id: ios.appId,
+    push_ios_api_key: iosKey,
+  };
+  const fields = {};
+  Object.keys(push).forEach(function (k) { fields[k] = firestoreValue_(push[k]); });
+  commitAll_(fb, [{
+    update: { name: fb.docs + '/meta/config', fields: fields },
+    updateMask: { fieldPaths: Object.keys(push) },
+  }]);
+  deployRules_(fb, 'cloud.firestore', 'firestore.rules', FIRESTORE_RULES);
+  installPushTriggers();
+  Logger.log('Push notifications are set up. Android app ' + android.appId + ', iPhone app ' + ios.appId + '.');
+  Logger.log('Last step for iPhones: Firebase console > Project settings > Cloud Messaging > Apple app configuration > upload the APNs authentication key (.p8) from developer.apple.com > Keys.');
+}
+
+/** The Firebase app of [kind] with [field] = [value]; made when missing. */
+function firebaseApp_(fb, base, kind, field, value) {
+  const find = function () {
+    return (googleApi_(fb, 'get', base + '/' + kind + '?pageSize=100')[kind] || [])
+      .filter(function (a) { return a[field] === value && a.state !== 'DELETED'; })[0];
+  };
+  let app = find();
+  if (app) return app;
+  const body = { displayName: 'Pilot Logbook' };
+  body[field] = value;
+  googleApi_(fb, 'post', base + '/' + kind, body);
+  for (let i = 0; i < 15 && !app; i++) {
+    Utilities.sleep(2000);
+    app = find();
+  }
+  if (!app) throw new Error('Firebase did not make the ' + kind + ' app ' + value + ' yet. Run setupPush again in a minute.');
+  return app;
+}
+
+function installPushTriggers() {
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === 'sendNotifications'; })
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('sendNotifications').timeBased().everyMinutes(10).create();
+}
+
+/** Every 10 minutes: see the top of this section. */
+function sendNotifications() {
+  const fb = firebaseConfig_();
+  const props = PropertiesService.getScriptProperties();
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const hour = Number(Utilities.formatDate(now, tz, 'H'));
+  const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  if (hour < NOTIFY_HOUR || hour >= NOTIFY_QUIET_FROM) return;
+  const state = JSON.parse(props.getProperty('NOTIFY_STATE') || '{}');
+  const daily = state.day !== today;
+  const changes = plainFields_((firestoreGet_(fb, 'meta/changes') || {}).fields || {});
+  const since = state.since || '';
+  const eventsChanged = !since || ['faults', 'fault_repairs'].some(function (t) { return (changes[t] || '') > since; });
+  if (!daily && !eventsChanged) return;
+
+  const tables = ['people', 'aircraft', 'batteries', 'notify_settings', 'push_devices', 'faults', 'fault_repairs', 'fault_signoffs'];
+  if (daily) tables.push('flights', 'maintenance', 'maintenance_intervals', 'competencies');
+  const data = {};
+  tables.forEach(function (t) { data[t] = firestoreRows_(fb, t); });
+  const out = buildNotifications_(data, state, { today: today, daily: daily, now: now.toISOString() });
+  out.messages.forEach(function (m) {
+    m.tokens.forEach(function (d) {
+      if (!sendPush_(fb, d.token, m)) dropDevice_(fb, d.id);
+    });
+  });
+  props.setProperty('NOTIFY_STATE', JSON.stringify(out.state));
+}
+
+/**
+ * What to send, without sending: [data] has the tables' rows (plain text
+ * fields), [state] what was sent before. Returns { messages: [{ person,
+ * tokens, title, body, page }], state }.
+ */
+function buildNotifications_(data, state, opts) {
+  const live = function (rows) { return (rows || []).filter(function (r) { return !isOnText_(r.deleted); }); };
+  const sent = Object.assign({}, state.sent || {});
+  const firstRun = !state.since;
+  const people = recipients_(data, live);
+  const aircraft = {};
+  live(data.aircraft).forEach(function (a) { aircraft[a.id] = a; });
+  const batteries = {};
+  live(data.batteries).forEach(function (b) { batteries[b.id] = b; });
+  const personName = {};
+  live(data.people).forEach(function (p) { personName[p.id] = p.name || ''; });
+  const droneName = function (id) { return aircraft[id] ? aircraft[id].name || id : ''; };
+  const batteryDrones = function (id) { return listOf_(batteries[id] && batteries[id].aircraft_ids); };
+
+  const perPerson = {}; // person id -> { events: [], daily: [] }
+  const add = function (who, kind, item) {
+    (perPerson[who.id] = perPerson[who.id] || { who: who, events: [], daily: [] })[kind].push(item);
+  };
+  const forDrone = function (who, aircraftId, batteryId) {
+    if (who.admin) return true;
+    if (aircraftId) return who.drones.indexOf(aircraftId) >= 0;
+    if (batteryId) return batteryDrones(batteryId).some(function (a) { return who.drones.indexOf(a) >= 0; });
+    return false;
+  };
+
+  // New faults and repairs: once each; the first run only remembers them.
+  const faults = {};
+  live(data.faults).forEach(function (f) { faults[f.id] = f; });
+  const closed = {};
+  live(data.fault_signoffs).forEach(function (s) { if (s.result === 'pass') closed[s.fault_id] = true; });
+  live(data.faults).forEach(function (f) {
+    const key = 'f:' + f.id;
+    if (sent[key]) return;
+    sent[key] = opts.today;
+    if (firstRun || closed[f.id]) return;
+    const what = f.aircraft_id ? 'drone ' + droneName(f.aircraft_id)
+      : f.battery_id ? 'battery set ' + ((batteries[f.battery_id] || {}).name || '') : (f.equipment || 'equipment');
+    const title = (Number(f.severity) === 3 ? 'Grounded: ' : 'New fault: ') + what;
+    const body = (personName[f.discovered_by_id] || f.discovered_by_id || '') + (f.discovered_by_id ? ': ' : '') + (f.description || '');
+    people.forEach(function (who) {
+      if (who.id === f.discovered_by_id || !who.wants.faults) return;
+      if (forDrone(who, f.aircraft_id, f.battery_id)) add(who, 'events', { title: title, body: body, page: 'Fault Repair' });
+    });
+  });
+  live(data.fault_repairs).forEach(function (r) {
+    const key = 'r:' + r.id;
+    if (sent[key] || !r.finished_at) return;
+    sent[key] = opts.today;
+    const f = faults[r.fault_id];
+    if (firstRun || !f || closed[f.id]) return;
+    const what = f.aircraft_id ? 'drone ' + droneName(f.aircraft_id) : (f.equipment || 'fault');
+    const item = { title: 'Repaired, waiting for the test: ' + what, body: r.work_performed || f.description || '', page: 'Fault Repair' };
+    people.forEach(function (who) {
+      if (!who.wants.repairs) return;
+      if (who.id === f.discovered_by_id || forDrone(who, f.aircraft_id, f.battery_id)) add(who, 'events', item);
+    });
+  });
+
+  let due = state.due || {};
+  if (opts.daily) {
+    const nowDue = {};
+    maintenanceDue_(data, live, opts.today).forEach(function (d) {
+      nowDue[d.key] = 1;
+      if (due[d.key]) return;
+      const item = { title: d.title, body: d.body, page: 'Maintenance' };
+      people.forEach(function (who) {
+        if (who.wants.maintenance && forDrone(who, d.aircraftId, d.batteryId)) add(who, 'daily', item);
+      });
+    });
+    due = nowDue;
+
+    live(data.competencies).forEach(function (c) {
+      const left = daysBetween_(opts.today, c.expires_on);
+      if (left === null || COMPETENCY_NOTICE_DAYS.indexOf(left) < 0) return;
+      const when = left === 0 ? 'expires today' : 'expires in ' + left + ' days';
+      people.forEach(function (who) {
+        if (who.id === c.person_id && who.wants.competencies) {
+          add(who, 'daily', { title: 'Your ' + (c.type || 'competency') + ' ' + when, body: c.expires_on ? 'Valid until ' + c.expires_on + '. Renew it and enter the new date.' : '', page: 'Competencies' });
+        } else if (who.admin && who.wants.team_competencies) {
+          add(who, 'daily', { title: (personName[c.person_id] || 'Someone') + ': ' + (c.type || 'competency') + ' ' + when, body: 'Valid until ' + c.expires_on, page: 'Competencies' });
+        }
+      });
+    });
+  }
+
+  const messages = [];
+  Object.keys(perPerson).forEach(function (id) {
+    const p = perPerson[id];
+    if (!p.who.tokens.length) return;
+    p.events.forEach(function (e) { messages.push(Object.assign({ person: id, tokens: p.who.tokens }, e)); });
+    if (p.daily.length === 1) messages.push(Object.assign({ person: id, tokens: p.who.tokens }, p.daily[0]));
+    if (p.daily.length > 1) {
+      messages.push({
+        person: id, tokens: p.who.tokens, page: p.daily[0].page,
+        title: p.daily.length + ' reminders',
+        body: p.daily.map(function (d) { return d.title; }).join('\n'),
+      });
+    }
+  });
+
+  // Faults and repairs are remembered for 60 days.
+  Object.keys(sent).forEach(function (k) {
+    if (daysBetween_(sent[k], opts.today) > 60) delete sent[k];
+  });
+  return {
+    messages: messages,
+    state: { since: opts.now, day: opts.daily ? opts.today : state.day, sent: sent, due: due },
+  };
+}
+
+/** People who may get something, with what they want and their phones. */
+function recipients_(data, live) {
+  const settings = {};
+  live(data.notify_settings).forEach(function (s) {
+    const old = settings[s.person_id];
+    if (!old || (s.updated_at || '') > (old.updated_at || '')) settings[s.person_id] = s;
+  });
+  const tokens = {};
+  live(data.push_devices).forEach(function (d) {
+    if (d.token) (tokens[d.person_id] = tokens[d.person_id] || []).push({ id: d.id, token: d.token });
+  });
+  const who = [];
+  const addPerson = function (id, admin) {
+    const s = settings[id];
+    const wants = {};
+    NOTIFY_TYPES.forEach(function (t) {
+      wants[t] = s ? isOnText_(s[t]) : false;
+    });
+    if (!admin) wants.team_competencies = false;
+    who.push({ id: id, admin: admin, wants: wants, drones: listOf_(s && s.aircraft_ids), tokens: tokens[id] || [] });
+  };
+  live(data.people).forEach(function (p) {
+    if (String(p.active) === '0' || p.active === 'false') return;
+    const roles = listOf_(p.roles);
+    if (roles.indexOf('viewer') >= 0) return;
+    addPerson(p.id, roles.indexOf('admin') >= 0);
+  });
+  addPerson('master', true);
+  return who;
+}
+
+/**
+ * Drones' and battery sets' assemblies due soon or overdue, as the app's
+ * Maintenance page counts them (maintenance.dart), each with a key that
+ * changes when it gets worse or is done again.
+ */
+function maintenanceDue_(data, live, today) {
+  const intervals = {};
+  live(data.maintenance_intervals)
+    .sort(function (a, b) { return (a.updated_at || '') < (b.updated_at || '') ? -1 : 1; })
+    .forEach(function (r) { intervals[(r.model || '').trim().toLowerCase() + '|' + r.section] = r; });
+  const intervalOf = function (section, model) {
+    const m = (model || '').trim().toLowerCase();
+    const r = (m && intervals[m + '|' + section]) || intervals['|' + section];
+    if (r) return { hours: numOrNull_(r.hours), flights: numOrNull_(r.flights), days: numOrNull_(r.days) };
+    return BOOK_INTERVALS[section] || {};
+  };
+  const maint = live(data.maintenance).sort(function (a, b) { return (b.performed_at || '').localeCompare(a.performed_at || ''); });
+  const flights = live(data.flights);
+  const out = [];
+  const units = [];
+  live(data.aircraft).forEach(function (a) {
+    if (String(a.active) !== '0') units.push({ id: a.id, name: 'Drone ' + (a.name || ''), column: 'aircraft_id', model: a.model, sections: Object.keys(BOOK_INTERVALS).filter(function (s) { return s !== 'power_system'; }) });
+  });
+  live(data.batteries).forEach(function (b) {
+    if (String(b.active) !== '0') units.push({ id: b.id, name: 'Battery set ' + (b.name || ''), column: 'battery_id', battery: true, sections: ['power_system'] });
+  });
+  units.forEach(function (u) {
+    const mine = maint.filter(function (m) {
+      return u.battery ? (m.battery_id || '').trim() === u.id : (m.aircraft_id || '').trim() === u.id && !(m.battery_id || '').trim();
+    });
+    u.sections.forEach(function (section) {
+      const iv = intervalOf(section, u.model);
+      if (iv.hours == null && iv.flights == null && iv.days == null) return;
+      const last = mine.filter(function (m) { return String(m[section] || '').trim() !== ''; })[0];
+      const lastAt = last ? last.performed_at || '' : '';
+      let n = 0, s = 0;
+      flights.forEach(function (f) {
+        if (f[u.column] !== u.id) return;
+        if ((f.date + ' ' + (f.takeoff_at || '23:59:59')) > lastAt) { n++; s += Number(f.duration_s) || 0; }
+      });
+      const days = lastAt ? daysBetween_(lastAt.split(' ')[0], today) : null;
+      let used = 0;
+      if (iv.hours > 0) used = Math.max(used, s / 3600 / iv.hours);
+      if (iv.flights > 0) used = Math.max(used, n / iv.flights);
+      if (iv.days > 0 && days !== null) used = Math.max(used, days / iv.days);
+      if (used < DUE_SOON_SHARE) return;
+      const over = used >= 1;
+      let left = '';
+      if (iv.hours != null) {
+        const sec = Math.round(iv.hours * 3600) - s;
+        left = hm_(Math.abs(sec)) + ' h ' + (sec >= 0 ? 'left' : 'over');
+      } else if (iv.days != null && days !== null) {
+        left = Math.abs(iv.days - days) + ' days ' + (iv.days - days >= 0 ? 'left' : 'over');
+      }
+      out.push({
+        key: 'm:' + u.id + ':' + section + ':' + (over ? 'over' : 'soon') + ':' + lastAt,
+        aircraftId: u.battery ? '' : u.id,
+        batteryId: u.battery ? u.id : '',
+        title: (over ? 'Maintenance overdue: ' : 'Maintenance due soon: ') + u.name,
+        body: SECTION_TITLES[section] + (left ? ', ' + left : ''),
+      });
+    });
+  });
+  return out;
+}
+
+function hm_(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+function numOrNull_(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+function listOf_(text) {
+  return String(text || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+}
+
+function isOnText_(v) {
+  return v === true || v === 1 || v === '1' || v === 'true';
+}
+
+/** Whole days from yyyy-MM-dd [from] to [to]; null when one is not a date. */
+function daysBetween_(from, to) {
+  const a = Date.parse(String(from || '').slice(0, 10) + 'T00:00:00Z');
+  const b = Date.parse(String(to || '').slice(0, 10) + 'T00:00:00Z');
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+/** One push to one phone; false when the phone's token is no longer valid. */
+function sendPush_(fb, token, m) {
+  const res = UrlFetchApp.fetch('https://fcm.googleapis.com/v1/projects/' + fb.project + '/messages:send', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Goog-User-Project': fb.project },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      message: {
+        token: token,
+        notification: { title: m.title, body: m.body },
+        data: { page: m.page || '' },
+        android: { priority: 'high', notification: { channel_id: 'reminders' } },
+        apns: { payload: { aps: { sound: 'default' } } },
+      },
+    }),
+  });
+  const code = res.getResponseCode();
+  if (code >= 200 && code < 300) return true;
+  const text = res.getContentText();
+  if (code === 404 || text.indexOf('UNREGISTERED') >= 0) return false;
+  Logger.log('Push failed: ' + code + ' ' + text.slice(0, 300));
+  return true;
+}
+
+/** Marks a phone whose token stopped working as deleted. */
+function dropDevice_(fb, id) {
+  const stamp = new Date().toISOString();
+  commitAll_(fb, [{
+    update: { name: fb.docs + '/push_devices/' + id, fields: { deleted: { stringValue: '1' }, updated_at: { stringValue: stamp } } },
+    updateMask: { fieldPaths: ['deleted', 'updated_at'] },
+    updateTransforms: [{ fieldPath: 'server_time', setToServerValue: 'REQUEST_TIME' }],
+  }, firestoreStamp_(fb, ['push_devices'])]);
+}
+
+function firestoreGet_(fb, path) {
+  try {
+    return googleApi_(fb, 'get', 'https://firestore.googleapis.com/v1/' + fb.docs + '/' + path);
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Every document of a collection as plain text fields. */
+function firestoreRows_(fb, table) {
+  const rows = [];
+  let pageToken = '';
+  do {
+    const page = googleApi_(fb, 'get', 'https://firestore.googleapis.com/v1/' + fb.docs + '/' + table +
+      '?pageSize=300' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''));
+    (page.documents || []).forEach(function (d) { rows.push(plainFields_(d.fields || {})); });
+    pageToken = page.nextPageToken || '';
+  } while (pageToken);
+  return rows;
 }
 
 // ----------------------------------------------------------------- backup
