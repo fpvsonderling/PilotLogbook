@@ -164,6 +164,23 @@ class SyncService extends ChangeNotifier {
     return encodeAccessKey(url!, answer['token'] as String);
   }
 
+  /// Firebase's settings for push notifications (meta/config, written by
+  /// Code.gs setupPush()); null without Firebase or before setupPush ran.
+  Future<Map<String, Object?>?> pushConfig() async {
+    if (!usesFirebase) return null;
+    final client = _firebase().client;
+    await client.signIn();
+    final config = await client.get('meta/config');
+    if (config == null || '${config['push_sender_id'] ?? ''}'.isEmpty) {
+      return null;
+    }
+    return {
+      ...config,
+      'project_id': firebaseKey!.projectId,
+      'api_key': firebaseKey!.apiKey,
+    };
+  }
+
   String? get token => db.setting(tokenKey);
   bool get configured =>
       usesFirebase || ((url ?? '').isNotEmpty && (token ?? '').isNotEmpty);

@@ -120,6 +120,17 @@ test('only the admin adds documents, projects and intervals', async () => {
   }
 });
 
+test('notification settings and phones: own rows only', async () => {
+  for (const table of ['notify_settings', 'push_devices']) {
+    await assertSucceeds(setDoc(doc(db('anna'), table, 'n-anna'), row('n-anna', { person_id: 'p-anna', created_by: 'p-anna' })));
+    await assertFails(setDoc(doc(db('anna'), table, 'n-boss'), row('n-boss', { person_id: 'p-boss' })));
+    await assertSucceeds(getDocs(query(collection(db('anna'), table), where('person_id', '==', 'p-anna'))));
+    await assertFails(getDocs(collection(db('anna'), table)));
+    await assertSucceeds(getDocs(collection(db('boss'), table)));
+    await assertSucceeds(setDoc(doc(db('boss'), table, 'n-master'), row('n-master', { person_id: 'master' })));
+  }
+});
+
 test('competencies: own rows only, verified only by the admin', async () => {
   await assertSucceeds(getDoc(doc(db('anna'), 'competencies', 'c-anna')));
   await assertFails(getDoc(doc(db('anna'), 'competencies', 'c-boss')));

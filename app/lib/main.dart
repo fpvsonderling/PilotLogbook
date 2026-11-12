@@ -8,8 +8,12 @@ import 'data/documents.dart';
 import 'data/local_db.dart';
 import 'data/logbook.dart';
 import 'data/photos.dart';
+import 'data/push.dart';
 import 'data/sync/sync_service.dart';
+import 'data/projects.dart';
+import 'data/schema.dart';
 import 'data/update_check.dart';
+import 'data/weather.dart';
 import 'ui/home.dart';
 import 'ui/services.dart';
 import 'ui/settings_page.dart' show appVersion;
@@ -30,7 +34,14 @@ Future<void> main() async {
 }
 
 class PilotLogbookApp extends StatefulWidget {
-  const PilotLogbookApp({super.key, required this.db, this.sync, this.updates});
+  const PilotLogbookApp({
+    super.key,
+    required this.db,
+    this.sync,
+    this.updates,
+    this.push = true,
+    this.weather,
+  });
 
   final LocalDb db;
 
@@ -39,6 +50,11 @@ class PilotLogbookApp extends StatefulWidget {
 
   /// Injected in tests; checks GitHub for [appVersion] otherwise.
   final UpdateChecker? updates;
+
+  /// False in tests: no system notifications or Firebase push.
+  final bool push;
+  /// Injected in tests; fetches from MET Norway otherwise.
+  final WeatherService? weather;
 
   @override
   State<PilotLogbookApp> createState() => _PilotLogbookAppState();
@@ -49,6 +65,19 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
   late final SyncService _sync = widget.sync ?? SyncService(widget.db);
   late final UpdateChecker _updates =
       widget.updates ?? UpdateChecker(current: appVersion);
+  late final WeatherService _weather =
+      widget.weather ?? WeatherService(widget.db);
+  DateTime? _weatherAfter;
+
+  /// After each sync, the forecasts of all active projects are fetched, so
+  /// the flight form has them later without internet.
+  void _prefetchWeather() {
+    final synced = _sync.lastSyncedAt;
+    if (synced == null || synced == _weatherAfter) return;
+    _weatherAfter = synced;
+    _weather.prefetch(widget.db.rows(Tables.projects).map(Project.new));
+  }
+
   late final ValueNotifier<ThemeMode> _theme = ValueNotifier(
     ThemeChoice.parse(widget.db.setting(ThemeChoice.settingsKey)),
   )..addListener(_saveTheme);
@@ -58,10 +87,16 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
     ThemeChoice.store(_theme.value),
   );
 
+  late final PushService? _push = widget.push
+      ? PushService(widget.db, _sync)
+      : null;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _push?.start();
+    _sync.addListener(_prefetchWeather);
     _sync.sync();
     _updates.check();
     // A window left open for days still learns about a new version.
@@ -78,6 +113,8 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _push?.dispose();
+    _sync.removeListener(_prefetchWeather);
     WidgetsBinding.instance.removeObserver(this);
     _theme.dispose();
     super.dispose();
@@ -101,6 +138,8 @@ class _PilotLogbookAppState extends State<PilotLogbookApp>
       sync: _sync,
       theme: _theme,
       updates: _updates,
+      push: _push,
+      weather: _weather,
       child: ValueListenableBuilder(
         valueListenable: _theme,
         builder: (context, mode, _) => MaterialApp(

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../data/schema.dart';
 import '../data/update_check.dart';
+import 'notifications_ui.dart';
 import 'services.dart';
 import 'update_banner.dart';
 
@@ -144,6 +145,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        const NotificationSettings(),
         const SizedBox(height: 24),
         Text('Theme', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
