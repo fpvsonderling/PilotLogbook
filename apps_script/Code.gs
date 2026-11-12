@@ -1660,13 +1660,15 @@ function installFirebaseTriggers() {
 //
 // Who gets what (the admin decides nothing here, each person in the app
 // under Settings > Notifications, table notify_settings):
-// - admin (role admin, or the master key as person "master"): everything
-//   is on until they switch it off, for every drone;
-// - anyone else: everything is off until they switch it on, and only for
-//   the drones they ticked under "My drones";
+// - everything is off until the person switches it on, the admin too;
+// - admin (role admin, or the master key as person "master"): for every
+//   drone; anyone else only for the drones they ticked under "My drones";
 // - viewer (read only key): nothing.
 // Phones register in push_devices (Android and iPhone, Firebase Cloud
 // Messaging). Windows and Mac show the same in the app's bell.
+// Each notification goes once: a fault or repair once ever, a
+// maintenance reminder once per level (due soon, overdue), a competency
+// 30, 7 and 0 days before expiry, so nothing repeats on the same day.
 //
 // sendNotifications() runs every 10 minutes (installPushTriggers): new
 // faults and repairs right away, maintenance and competencies once a day
@@ -1920,7 +1922,7 @@ function recipients_(data, live) {
     const s = settings[id];
     const wants = {};
     NOTIFY_TYPES.forEach(function (t) {
-      wants[t] = s ? isOnText_(s[t]) : admin;
+      wants[t] = s ? isOnText_(s[t]) : false;
     });
     if (!admin) wants.team_competencies = false;
     who.push({ id: id, admin: admin, wants: wants, drones: listOf_(s && s.aircraft_ids), tokens: tokens[id] || [] });

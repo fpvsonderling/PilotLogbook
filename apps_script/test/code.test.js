@@ -879,7 +879,9 @@ function notifyData() {
     ],
     batteries: [{ id: 'b42', name: '42', aircraft_ids: 'a24' }],
     notify_settings: [
-      // Anna wants faults and maintenance of drone 19; Tom set nothing.
+      // Everything starts off, the admin switched all on; Anna wants faults
+      // and maintenance of drone 19; Tom set nothing.
+      { id: 'notify-p-boss', person_id: 'p-boss', faults: '1', repairs: '1', maintenance: '1', competencies: '1', team_competencies: '1' },
       { id: 'notify-p-anna', person_id: 'p-anna', faults: '1', maintenance: '1', competencies: '1', aircraft_ids: 'a19' },
     ],
     push_devices: [
@@ -900,6 +902,17 @@ function notifyData() {
 
 const whoGot = (out) => Array.from(out.messages, (m) => m.person + ': ' + m.title).sort();
 const none = (out) => assert.strictEqual(out.messages.length, 0);
+
+test('push: everyone starts with everything off, the admin too', () => {
+  const { ctx } = load();
+  const data = notifyData();
+  data.notify_settings = [];
+  data.faults.push({ id: 'f-old', aircraft_id: 'a19' });
+  let out = ctx.buildNotifications_(data, {}, { today: '2026-11-12', daily: false, now: '2026-11-12T08:00:00Z' });
+  data.faults.push({ id: 'f19', aircraft_id: 'a19', description: 'arm', discovered_by_id: 'p-tom' });
+  out = ctx.buildNotifications_(data, out.state, { today: '2026-11-12', daily: true, now: '2026-11-12T08:10:00Z' });
+  none(out);
+});
 
 test('push: the first run only remembers faults, then each new one goes once', () => {
   const { ctx } = load();

@@ -2,8 +2,8 @@
 /// and the list behind the bell at the top of the app. Phones also get
 /// them as push notifications, sent by Code.gs sendNotifications() with
 /// the same rules:
-/// - the admin gets everything until they switch it off, for every drone;
-/// - anyone else gets nothing until they switch it on, and only for the
+/// - everyone, the admin too, gets nothing until they switch it on;
+/// - the admin then gets it for every drone, anyone else only for the
 ///   drones they tick under "My drones";
 /// - a viewer (read only key) gets nothing.
 library;
@@ -154,7 +154,7 @@ class Notifications {
     final row = o == null ? null : db.byId(Tables.notifySettings, rowId(o));
     if (row == null || row['deleted'] == 1) {
       return NotifyPrefs(
-        on: {for (final t in notifyTypes) t.column: admin && o != null},
+        on: {for (final t in notifyTypes) t.column: false},
         drones: const {},
       );
     }

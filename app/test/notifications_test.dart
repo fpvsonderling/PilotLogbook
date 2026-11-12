@@ -74,20 +74,22 @@ void main() {
     },
   );
 
-  test(
-    'the admin gets everything for every drone until they switch it off',
-    () {
-      final w = _world();
-      final n = Notifications(w.db, me: null, admin: true, viewer: false);
-      expect(n.owner, Notifications.master);
-      final titles = [for (final i in n.inbox()) i.title];
-      expect(titles.first, 'Grounded: drone 24');
-      expect(titles, contains('New fault: drone 19'));
+  test('the admin too starts with nothing, then gets every drone', () {
+    final w = _world();
+    final n = Notifications(w.db, me: null, admin: true, viewer: false);
+    expect(n.owner, Notifications.master);
+    expect(n.prefs().on.values.any((v) => v), isFalse);
+    expect(n.inbox(), isEmpty);
+    n.save(
+      n.prefs().copyWith(on: {for (final t in notifyTypes) t.column: true}),
+    );
+    final titles = [for (final i in n.inbox()) i.title];
+    expect(titles.first, 'Grounded: drone 24');
+    expect(titles, contains('New fault: drone 19'));
 
-      n.save(n.prefs().copyWith(on: {...n.prefs().on, 'faults': false}));
-      expect(n.inbox().any((i) => i.title.contains('fault')), isFalse);
-    },
-  );
+    n.save(n.prefs().copyWith(on: {...n.prefs().on, 'faults': false}));
+    expect(n.inbox().any((i) => i.title.contains('fault')), isFalse);
+  });
 
   test(
     'a viewer gets nothing; the reporter is not told of their own fault',
@@ -108,6 +110,7 @@ void main() {
   test('seen and new items', () {
     final w = _world();
     final n = Notifications(w.db, me: null, admin: true, viewer: false);
+    n.save(n.prefs().copyWith(on: {'faults': true, 'maintenance': true}));
     expect(n.unseen(), hasLength(n.inbox().length));
     n.markSeen();
     expect(n.unseen(), isEmpty);

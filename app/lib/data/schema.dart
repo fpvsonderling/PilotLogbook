@@ -287,8 +287,8 @@ class Tables {
 
   // What push notifications a person wants (one row per person, id
   // "notify-<person_id>"; the master admin key uses person_id "master").
-  // Only that person and the admin read and change it. 1 = on. No row: an
-  // admin gets everything, anyone else nothing. aircraft_ids: the person's
+  // Only that person and the admin read and change it. 1 = on. No row:
+  // nothing (everything starts switched off, for the admin too). aircraft_ids: the person's
   // drones ("My drones"), comma separated; the admin gets every drone.
   static const notifySettings = TableDef('notify_settings', [
     Col('person_id'),
