@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,7 +17,7 @@ Map<String, dynamic> metAnswer(
   DateTime start, {
   int hourly = 8,
   double wind = 6.4,
-  double gust = 9.1,
+  double? gust = 9.1,
   double rain = 0,
 }) {
   Map<String, dynamic> step(DateTime t, int i) => {
@@ -24,7 +26,7 @@ Map<String, dynamic> metAnswer(
       'instant': {
         'details': {
           'wind_speed': wind + i * 0.5,
-          'wind_speed_of_gust': gust + i * 0.5,
+          if (gust != null) 'wind_speed_of_gust': gust + i * 0.5,
           'wind_from_direction': 225.0,
           'air_temperature': 7.2,
           'relative_humidity': 81.0,
@@ -133,6 +135,39 @@ void main() {
     expect(const WeatherLimits().problems(h, 2), ['Rain']);
   });
 
+  test('without a gust forecast, gusts are estimated from the wind', () {
+    final h = parseMetNorway(metAnswer(DateTime.utc(2026), gust: null)).first;
+    expect(h.gust, isNull);
+    expect(h.gustEstimated, isTrue);
+    expect(h.gustShown, closeTo(6.4 * 1.4, 1e-9));
+    final windy = WeatherHour(time: DateTime.utc(2026), wind: 9.2);
+    expect(const WeatherLimits().problems(windy, null), [
+      'Gusts (est.) above 12 m/s',
+    ]);
+    final known = WeatherHour(time: DateTime.utc(2026), wind: 9.2, gust: 10);
+    expect(known.gustEstimated, isFalse);
+    expect(known.gustShown, 10);
+    expect(WeatherHour(time: DateTime.utc(2026)).gustShown, isNull);
+  });
+
+  test('the card says why the fetch failed', () {
+    expect(
+      WeatherService.describe(const HandshakeException('CERTIFICATE')),
+      'certificate error',
+    );
+    expect(
+      WeatherService.describe(
+        http.ClientException('HandshakeException: CERTIFICATE_VERIFY_FAILED'),
+      ),
+      'certificate error',
+    );
+    expect(WeatherService.describe(TimeoutException('slow')), 'timeout');
+    expect(
+      WeatherService.describe(const SocketException('down')),
+      'no connection',
+    );
+  });
+
   test('project place: first point, else its maps link', () {
     expect(
       weatherPoint(Project({'coordinates': 'T01: 55.6, 7.6\nT02: 55.7, 7.7'})),
@@ -220,7 +255,8 @@ void main() {
     Future<LocalDb> open(
       WidgetTester tester, {
       bool online = true,
-      double gust = 9.1,
+      double? gust = 9.1,
+      int status = 200,
       String? coordinates = 'T01: 55.6, 7.6',
     }) async {
       tester.view.physicalSize = const Size(1080, 2340);
@@ -244,7 +280,7 @@ void main() {
           return request.url.host == 'api.met.no'
               ? http.Response(
                   jsonEncode(metAnswer(thisHour(), gust: gust)),
-                  200,
+                  status,
                 )
               : http.Response(jsonEncode(kpRows(thisHour(), 2)), 200);
         }),
@@ -279,6 +315,18 @@ void main() {
     testWidgets('no connection and nothing kept', (tester) async {
       await open(tester, online: false);
       expect(find.text('No weather: no connection'), findsOneWidget);
+    });
+
+    testWidgets('a refused request says so', (tester) async {
+      await open(tester, status: 403);
+      expect(find.text('No weather: HTTP 403'), findsOneWidget);
+    });
+
+    testWidgets('outside the Nordics gusts are an estimate', (tester) async {
+      await open(tester, gust: null);
+      expect(find.text('≈9.0'), findsOneWidget);
+      expect(find.text('est. · max 12'), findsOneWidget);
+      expect(find.text('6/≈9'), findsOneWidget);
     });
 
     testWidgets('no card for a project without coordinates', (tester) async {

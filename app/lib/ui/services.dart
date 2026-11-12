@@ -42,6 +42,7 @@ class Services extends InheritedWidget {
     admin: sync.isAdmin,
     viewer: sync.readOnly,
   );
+
   /// Forecasts for the flight form (none: the weather card is hidden).
   final WeatherService? weather;
 

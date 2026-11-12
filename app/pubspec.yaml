@@ -87,6 +87,8 @@ flutter:
   # Figures of the FB3 maintenance manual (lib/data/maintenance_guide.dart).
   assets:
     - assets/maintenance/
+    # Mozilla root certificates (certifi), used for weather on Windows.
+    - assets/certs/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
