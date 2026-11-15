@@ -302,6 +302,31 @@ void main() {
       await synced(v2);
     });
 
+    test('the admin sees who has a key and who signed in', () async {
+      final boss = device(master);
+      await synced(boss);
+      var keys = (await boss.keyStatuses())!;
+      // Anna and Vera have keys made in setUp, nobody signed in yet; Boss
+      // has none.
+      expect(keys.keys, unorderedEquals(['p-anna', 'p-vera']));
+      expect(keys['p-anna']!.signedIn, isFalse);
+      final a = device(anna);
+      await synced(a);
+      // A viewer's key notes it too.
+      await synced(device(vera));
+      keys = (await boss.keyStatuses())!;
+      expect(keys['p-anna']!.signedIn, isTrue);
+      expect(keys['p-anna']!.app, startsWith('linux'));
+      expect(keys['p-vera']!.signedIn, isTrue);
+      expect(keys['p-boss'], isNull);
+      // A renewed key starts as not signed in.
+      await boss.personKey('p-anna', renew: true);
+      keys = (await boss.keyStatuses())!;
+      expect(keys['p-anna']!.signedIn, isFalse);
+      // Only the admin may read this.
+      expect(a.keyStatuses(), throwsA(isA<Exception>()));
+    });
+
     test('many rows come down page by page', () async {
       for (var i = 0; i < 3; i++) {
         await seedRows('flights', [

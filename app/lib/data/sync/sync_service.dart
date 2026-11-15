@@ -12,6 +12,7 @@ import 'firebase_client.dart';
 import 'firebase_sync.dart';
 import 'sync_errors.dart';
 
+export 'firebase_sync.dart' show KeyStatus;
 export 'sync_errors.dart';
 
 /// Sends one JSON request to the spreadsheet's Apps Script and returns its
@@ -162,6 +163,14 @@ class SyncService extends ChangeNotifier {
       'renew': renew,
     });
     return encodeAccessKey(url!, answer['token'] as String);
+  }
+
+  /// For the admin, per person id: whether they have an access key and
+  /// when it last signed in. Null without Firebase (the Sheets backend
+  /// does not record it).
+  Future<Map<String, KeyStatus>?> keyStatuses() async {
+    if (!usesFirebase) return null;
+    return _firebase().keyStatuses();
   }
 
   /// Firebase's settings for push notifications (meta/config, written by

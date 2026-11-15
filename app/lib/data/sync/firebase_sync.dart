@@ -21,6 +21,33 @@ class FirebaseAccount {
   final String me;
 }
 
+/// The version this app was built as (CI sets it), e.g. 1.10.0+140.
+const appBuild = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
+
+/// A person's access key as the admin sees it in People: no [KeyStatus]
+/// at all means the person has no key.
+class KeyStatus {
+  const KeyStatus({this.madeAt, this.lastSeen, this.app});
+
+  /// When the admin made the key (and so copied it to hand out).
+  final DateTime? madeAt;
+
+  /// When the key last signed in, null when it never did.
+  final DateTime? lastSeen;
+
+  /// "Windows 1.10.0+140": the app it last signed in from.
+  final String? app;
+
+  bool get signedIn => lastSeen != null;
+
+  /// Of two active keys of one person, the one used last.
+  KeyStatus newer(KeyStatus o) {
+    if (lastSeen == null) return o.lastSeen != null ? o : this;
+    if (o.lastSeen == null) return this;
+    return o.lastSeen!.isAfter(lastSeen!) ? o : this;
+  }
+}
+
 /// Tables only the admin adds to and changes (adminOnly in the rules).
 const adminOnlyTables = {'documents', 'maintenance_intervals', 'projects'};
 
@@ -51,6 +78,7 @@ class FirebaseSync {
         'Access key not valid or turned off. Ask the administrator.',
       );
     }
+    await _seen(member);
     final kind = member['kind'];
     if (kind == 'master') {
       return const FirebaseAccount(admin: true, readOnly: false, me: '');
@@ -88,6 +116,40 @@ class FirebaseSync {
     final pushed = await _push(a, skip);
     final pulled = await _pull(a);
     return (pushed, pulled);
+  }
+
+  /// Notes on the key's members document that it was just used
+  /// (last_seen_at, server time) and by which app, so the admin sees in
+  /// People who signs in with their key. At most every 15 minutes, and it
+  /// never stops a sync (older security rules refuse it).
+  Future<void> _seen(Map<String, Object?> member) async {
+    final last = member['last_seen_at'];
+    final app = '$platformName $appBuild';
+    if (last is DateTime &&
+        member['app'] == app &&
+        DateTime.now().toUtc().difference(last) < seenEvery) {
+      return;
+    }
+    try {
+      await client.commit([
+        client.patch('members/${client.uid}', {
+          'app': app,
+        }, stampField: 'last_seen_at'),
+      ]);
+    } on SyncException {
+      // Not important enough to fail the sync for.
+    }
+  }
+
+  static const seenEvery = Duration(minutes: 15);
+
+  /// "Windows", "Android", "iPhone", "macOS".
+  static String get platformName {
+    if (Platform.isWindows) return 'Windows';
+    if (Platform.isAndroid) return 'Android';
+    if (Platform.isIOS) return 'iPhone';
+    if (Platform.isMacOS) return 'macOS';
+    return Platform.operatingSystem;
   }
 
   // ------------------------------------------------------------------ push
@@ -261,6 +323,30 @@ class FirebaseSync {
           }, stampField: 'turned_off_at'),
     ]);
     return key.encode();
+  }
+
+  /// For the admin: per person id, the state of their access key.
+  Future<Map<String, KeyStatus>> keyStatuses() async {
+    await client.signIn();
+    final members = await client.query(
+      'members',
+      equals: const MapEntry('kind', 'person'),
+    );
+    final out = <String, KeyStatus>{};
+    for (final m in members) {
+      final person = m['person_id'];
+      if (person is! String || person.isEmpty || m['active'] != true) continue;
+      final seen = m['last_seen_at'];
+      final made = m['created_at'];
+      final s = KeyStatus(
+        madeAt: made is DateTime ? made : null,
+        lastSeen: seen is DateTime ? seen : null,
+        app: m['app'] as String?,
+      );
+      final before = out[person];
+      out[person] = before == null ? s : before.newer(s);
+    }
+    return out;
   }
 
   // ----------------------------------------------------------------- files
