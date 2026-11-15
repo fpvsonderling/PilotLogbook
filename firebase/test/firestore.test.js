@@ -8,7 +8,7 @@ const {
 } = require('@firebase/rules-unit-testing');
 const {
   doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where,
-  serverTimestamp,
+  serverTimestamp, updateDoc,
 } = require('firebase/firestore');
 
 let env;
@@ -74,6 +74,21 @@ test('everyone reads their own member document only', async () => {
   await assertFails(getDocs(collection(db('anna'), 'members')));
   await assertFails(setDoc(doc(db('anna'), 'members', 'anna2'), { kind: 'master', active: true }));
   await assertSucceeds(setDoc(doc(db('master'), 'members', 'new'), { kind: 'person', person_id: 'p-anna', active: true }));
+});
+
+test('a key notes only when it was last used, on its own document', async () => {
+  const seen = { last_seen_at: serverTimestamp(), app: 'Windows 1.10.0+140' };
+  await assertSucceeds(updateDoc(doc(db('anna'), 'members', 'anna'), seen));
+  await assertSucceeds(updateDoc(doc(db('vera'), 'members', 'vera'), seen));
+  // Not someone else's, not with a time of its own, nothing else.
+  await assertFails(updateDoc(doc(db('anna'), 'members', 'boss'), seen));
+  await assertFails(updateDoc(doc(db('anna'), 'members', 'anna'), { last_seen_at: new Date(2020, 0, 1) }));
+  await assertFails(updateDoc(doc(db('anna'), 'members', 'anna'), { ...seen, kind: 'master' }));
+  await assertFails(updateDoc(doc(db('anna'), 'members', 'anna'), { ...seen, active: false }));
+  await assertFails(updateDoc(doc(db('anna'), 'members', 'anna'), { ...seen, app: 'x'.repeat(61) }));
+  // The admin still reads them all, with the time.
+  const all = await getDocs(collection(db('boss'), 'members'));
+  assert.ok(all.docs.find((d) => d.id === 'anna').data().last_seen_at);
 });
 
 test('a pilot adds rows as their own and changes only those', async () => {

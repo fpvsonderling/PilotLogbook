@@ -232,6 +232,23 @@ class FirebaseClient {
     ],
   };
 
+  /// A write that sets only [fields] of the existing document [path], and
+  /// [stampField] to the server's time, keeping its other fields.
+  Map<String, Object?> patch(
+    String path,
+    Map<String, Object?> fields, {
+    required String stampField,
+  }) => {
+    'update': {'name': '$_db/$path', 'fields': encodeFields(fields)},
+    'updateMask': {
+      'fieldPaths': [for (final f in fields.keys) _fieldPath(f)],
+    },
+    'updateTransforms': [
+      {'fieldPath': _fieldPath(stampField), 'setToServerValue': 'REQUEST_TIME'},
+    ],
+    'currentDocument': {'exists': true},
+  };
+
   /// A write that only sets [fieldNames] of document [path] to the
   /// server's time, keeping its other fields.
   Map<String, Object?> stamp(String path, Iterable<String> fieldNames) => {

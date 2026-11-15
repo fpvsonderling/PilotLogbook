@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
 import '../data/local_db.dart';
 import '../data/logbook.dart';
 import '../data/schema.dart';
+import '../data/sync/sync_service.dart' show KeyStatus;
 import 'intervals_tab.dart';
 import 'services.dart';
 
@@ -101,7 +103,6 @@ class _ReferenceList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final services = Services.of(context);
-    final db = services.db;
     return Scaffold(
       floatingActionButton: AddButton(
         child: FloatingActionButton.small(
@@ -110,32 +111,64 @@ class _ReferenceList extends StatelessWidget {
           child: const Icon(Icons.add),
         ),
       ),
-      body: DbBuilder(
-        builder: (context) {
-          final rows = db.rows(table, orderBy: 'name COLLATE NOCASE');
-          final drones = services.logbook.names(Tables.aircraft);
-          if (rows.isEmpty) {
-            return const Center(child: Text('Nothing here yet'));
-          }
-          return ListView(
-            children: [
-              for (final r in rows)
-                ListTile(
-                  title: Text(r['name'] as String? ?? ''),
-                  subtitle: Text(
-                    [
-                      for (final d in _details)
-                        if ((r[d] as String? ?? '').isNotEmpty) r[d],
-                      ?_chipDetail(r, drones),
-                    ].join(' · '),
-                  ),
-                  trailing: r['active'] == 0 ? const Text('inactive') : null,
-                  onTap: services.canChange(r) ? () => _edit(context, r) : null,
-                ),
-            ],
-          );
-        },
-      ),
+      body: table == Tables.people && services.isAdmin
+          ? _KeyStatusLoader(
+              builder: (keys, refresh) => _list(context, keys, refresh),
+            )
+          : _list(context, null, null),
+    );
+  }
+
+  /// The list; for People seen by the admin, [keys] tells per person
+  /// whether they have an access key and when they last signed in with it
+  /// (null while loading, offline, or without Firebase).
+  Widget _list(BuildContext context, _KeyState? keys, VoidCallback? refresh) {
+    final services = Services.of(context);
+    final db = services.db;
+    return DbBuilder(
+      builder: (context) {
+        final rows = db.rows(table, orderBy: 'name COLLATE NOCASE');
+        final drones = services.logbook.names(Tables.aircraft);
+        if (rows.isEmpty) {
+          return const Center(child: Text('Nothing here yet'));
+        }
+        final details = [
+          for (final r in rows)
+            [
+              for (final d in _details)
+                if ((r[d] as String? ?? '').isNotEmpty) r[d],
+              ?_chipDetail(r, drones),
+            ].join(' · '),
+        ];
+        return ListView(
+          children: [
+            if (keys != null)
+              _KeySummary(
+                keys: keys,
+                people: [
+                  for (final r in rows)
+                    if (r['active'] != 0) r['id'] as String,
+                ],
+                refresh: refresh!,
+              ),
+            for (final (i, r) in rows.indexed)
+              ListTile(
+                title: Text(r['name'] as String? ?? ''),
+                subtitle: keys == null
+                    ? Text(details[i])
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (details[i].isNotEmpty) Text(details[i]),
+                          _KeyLine(state: keys, personId: r['id'] as String),
+                        ],
+                      ),
+                trailing: r['active'] == 0 ? const Text('inactive') : null,
+                onTap: services.canChange(r) ? () => _edit(context, r) : null,
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -459,5 +492,198 @@ Future<void> _showPersonKey(BuildContext context, DbRow person) async {
         ],
       ),
     ),
+  );
+}
+
+/// The admin's view of everyone's access keys, loaded from the server
+/// when People opens (and with the refresh button).
+class _KeyState {
+  const _KeyState({this.keys, this.error, this.loading = false});
+
+  /// Per person id; a person missing here has no key.
+  final Map<String, KeyStatus>? keys;
+  final String? error;
+  final bool loading;
+}
+
+class _KeyStatusLoader extends StatefulWidget {
+  const _KeyStatusLoader({required this.builder});
+
+  final Widget Function(_KeyState? keys, VoidCallback refresh) builder;
+
+  @override
+  State<_KeyStatusLoader> createState() => _KeyStatusLoaderState();
+}
+
+class _KeyStatusLoaderState extends State<_KeyStatusLoader> {
+  _KeyState? _state = const _KeyState(loading: true);
+
+  @override
+  void initState() {
+    super.initState();
+    // After the first frame: Services is looked up from the context.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    final sync = Services.of(context).sync;
+    setState(() => _state = _KeyState(keys: _state?.keys, loading: true));
+    _KeyState? next;
+    try {
+      final keys = await sync.keyStatuses();
+      // Without Firebase nothing is known: no key lines at all.
+      next = keys == null ? null : _KeyState(keys: keys);
+    } catch (e) {
+      next = _KeyState(error: '$e');
+    }
+    if (mounted) setState(() => _state = next);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(_state, _load);
+}
+
+final _seenFormat = DateFormat('dd.MM.yyyy HH:mm');
+
+/// "Signed in 15.11.2026 08:20 · Windows 1.10.0", "Has a key, not signed
+/// in yet" or "No access key", under a person's name.
+class _KeyLine extends StatelessWidget {
+  const _KeyLine({required this.state, required this.personId});
+
+  final _KeyState state;
+  final String personId;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final keys = state.keys;
+    if (keys == null) return const SizedBox.shrink();
+    final k = keys[personId];
+    final (IconData icon, Color color, String text) = switch (k) {
+      null => (Icons.key_off_outlined, scheme.outline, 'No access key'),
+      KeyStatus(lastSeen: final seen?) => (
+        Icons.check_circle,
+        keyGreen(context),
+        'Signed in ${_seenFormat.format(seen.toLocal())}'
+            '${(k.app ?? '').isEmpty ? '' : ' · ${_shortApp(k.app!)}'}',
+      ),
+      _ => (
+        Icons.key,
+        keyAmber(context),
+        'Has a key${k.madeAt == null ? '' : ' (made ${DateFormat('dd.MM.yyyy').format(k.madeAt!.toLocal())})'}'
+            ', not signed in yet',
+      ),
+    };
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              text,
+              key: Key('key-status-$personId'),
+              style: TextStyle(color: color, fontSize: 12.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Windows 1.10.0+140" without the build number.
+String _shortApp(String app) => app.replaceFirst(RegExp(r'\+\d+$'), '');
+
+Color keyGreen(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF8BD17C)
+    : const Color(0xFF2E7D32);
+
+Color keyAmber(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFFE8B84A)
+    : const Color(0xFF8A5A00);
+
+/// Above the People list: how many active people signed in, have a key
+/// but did not sign in yet, and have none; and the refresh button.
+class _KeySummary extends StatelessWidget {
+  const _KeySummary({
+    required this.keys,
+    required this.people,
+    required this.refresh,
+  });
+
+  final _KeyState keys;
+  final List<String> people;
+  final VoidCallback refresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final k = keys.keys;
+    final Widget text;
+    if (keys.error != null) {
+      text = Text(
+        'Access keys: could not load (${keys.error})',
+        style: TextStyle(color: theme.colorScheme.error),
+      );
+    } else if (k == null) {
+      text = const Text('Access keys: loading…');
+    } else {
+      final signedIn = people.where((p) => k[p]?.signedIn ?? false).length;
+      final waiting = people
+          .where((p) => k[p] != null && !k[p]!.signedIn)
+          .length;
+      final none = people.length - signedIn - waiting;
+      text = Wrap(
+        spacing: 14,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'Access keys (active people):',
+            style: theme.textTheme.labelLarge,
+          ),
+          _count(Icons.check_circle, keyGreen(context), '$signedIn signed in'),
+          _count(Icons.key, keyAmber(context), '$waiting not signed in yet'),
+          _count(
+            Icons.key_off_outlined,
+            theme.colorScheme.outline,
+            '$none no key',
+          ),
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 4, 4),
+      child: Row(
+        children: [
+          Expanded(child: text),
+          IconButton(
+            key: const Key('key-status-refresh'),
+            tooltip: 'Refresh key status',
+            onPressed: keys.loading ? null : refresh,
+            icon: keys.loading
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _count(IconData icon, Color color, String text) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 16, color: color),
+      const SizedBox(width: 4),
+      Text(text),
+    ],
   );
 }

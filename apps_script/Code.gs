@@ -1208,11 +1208,19 @@ service cloud.firestore {
       return valid() && account().admin;
     }
 
-    // The app's keys and who they belong to: only the admin.
+    // The app's keys and who they belong to: only the admin. A key may
+    // only note on its own document when it was last used (last_seen_at,
+    // the server's time) and from which app, for the admin's People list.
     match /members/{uid} {
       allow get: if request.auth != null
         && (request.auth.uid == uid || admin());
       allow list, create, update, delete: if admin();
+      allow update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['last_seen_at', 'app'])
+        && request.resource.data.last_seen_at == request.time
+        && request.resource.data.get('app', '') is string
+        && request.resource.data.get('app', '').size() <= 60;
     }
 
     // meta/changes: per table, when it last changed (the app skips tables
@@ -1654,6 +1662,40 @@ function installFirebaseTriggers() {
     })
     .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('mirrorFromFirebase').timeBased().everyDays(1).atHour(2).create();
+}
+
+/**
+ * Run once after pasting this version: puts the new security rules in
+ * place (each key may note when it was last used, for the admin's People
+ * list) and fills in, from Firebase Authentication, when every key last
+ * signed in before that, so People shows it straight away.
+ */
+function updateKeyStatus() {
+  const fb = firebaseConfig_();
+  deployRules_(fb, 'cloud.firestore', 'firestore.rules', FIRESTORE_RULES);
+  const lastLogin = {};
+  let pageToken = '';
+  do {
+    const page = googleApi_(fb, 'get', 'https://identitytoolkit.googleapis.com/v1/projects/' + fb.project +
+      '/accounts:batchGet?maxResults=1000' + (pageToken ? '&nextPageToken=' + encodeURIComponent(pageToken) : ''));
+    (page.users || []).forEach(function (u) {
+      if (u.lastLoginAt) lastLogin[u.localId] = new Date(Number(u.lastLoginAt));
+    });
+    pageToken = page.nextPageToken || '';
+  } while (pageToken);
+  const writes = [];
+  firestoreRows_(fb, 'members').forEach(function (m) {
+    const login = lastLogin[m.uid];
+    if (!m.uid || !login) return;
+    if (m.last_seen_at && new Date(m.last_seen_at) >= login) return;
+    writes.push({
+      update: { name: fb.docs + '/members/' + m.uid, fields: { last_seen_at: { timestampValue: login.toISOString() } } },
+      updateMask: { fieldPaths: ['last_seen_at'] },
+      currentDocument: { exists: true },
+    });
+  });
+  commitAll_(fb, writes);
+  Logger.log('Rules updated. Last sign-in filled in for ' + writes.length + ' keys.');
 }
 
 // ------------------------------------------------------ push notifications

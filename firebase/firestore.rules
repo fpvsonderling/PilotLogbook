@@ -68,11 +68,19 @@ service cloud.firestore {
       return valid() && account().admin;
     }
 
-    // The app's keys and who they belong to: only the admin.
+    // The app's keys and who they belong to: only the admin. A key may
+    // only note on its own document when it was last used (last_seen_at,
+    // the server's time) and from which app, for the admin's People list.
     match /members/{uid} {
       allow get: if request.auth != null
         && (request.auth.uid == uid || admin());
       allow list, create, update, delete: if admin();
+      allow update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['last_seen_at', 'app'])
+        && request.resource.data.last_seen_at == request.time
+        && request.resource.data.get('app', '') is string
+        && request.resource.data.get('app', '').size() <= 60;
     }
 
     // meta/changes: per table, when it last changed (the app skips tables
