@@ -158,7 +158,7 @@ jobs:
   # first start is right-click -> Open (or System Settings -> Privacy &
   # Security -> Open Anyway).
   macos:
-    runs-on: macos-latest
+    runs-on: xcode-27
     needs: test
     steps:
       - uses: actions/checkout@v4
@@ -228,7 +228,7 @@ jobs:
             <!-- pilotlogbook-build: ${{ github.run_number }} (the app compares its own build number with this to ask for an update) -->
 
   ios:
-    runs-on: macos-latest
+    runs-on: xcode-27
     needs: test
     env:
       APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
