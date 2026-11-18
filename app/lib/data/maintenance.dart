@@ -180,6 +180,14 @@ class SectionDue {
     return share;
   }
 
+  /// The flight time limit is reached or passed.
+  bool get hoursOver =>
+      interval.hours != null && secondsSince >= interval.hours! * 3600;
+
+  /// The flight count limit is reached or passed.
+  bool get flightsOver =>
+      interval.flights != null && flightsSince >= interval.flights!;
+
   DueLevel get level {
     if (interval.isOff) return DueLevel.ok;
     final u = used;

@@ -235,6 +235,14 @@ class _DroneCard extends StatelessWidget {
     final flights = next?.flightsSince ?? drone.flightsSince;
     final from = next == null ? last?.performedAt : next.lastAt;
     final dueOn = _earliestDueOn(drone);
+    // Red when a flight time or flight count limit is passed.
+    final over = CheckColors.of(context).problem;
+    final hoursOver = next?.hoursOver ?? false;
+    final flightsOver = next?.flightsOver ?? false;
+    final overSmall = theme.textTheme.bodySmall?.copyWith(
+      color: over,
+      fontWeight: FontWeight.w700,
+    );
     return SizedBox(
       width: width,
       child: Card(
@@ -260,7 +268,9 @@ class _DroneCard extends StatelessWidget {
               children: [
                 Text(
                   drone.title,
-                  style: theme.textTheme.titleSmall,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -273,21 +283,24 @@ class _DroneCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   '${formatHours(seconds)} h',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
+                  key: Key('hours-${drone.name}'),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: hoursOver ? over : null,
                   ),
                 ),
                 Text(
                   '$flights ${flights == 1 ? 'flight' : 'flights'}'
                   '${from == null ? ' in total' : ' since ${_day(from)}'}',
-                  style: muted,
+                  key: Key('flights-${drone.name}'),
+                  style: flightsOver ? overSmall : muted,
                 ),
                 if (dueOn != null)
                   Text(
                     '${_isPast(dueOn) ? 'Was due' : 'Due by'} '
                     '${_dayOf(dueOn)}',
                     key: Key('due-on-${drone.name}'),
-                    style: muted,
+                    style: _isPast(dueOn) ? overSmall : muted,
                   ),
                 if (due.isNotEmpty) ...[
                   const SizedBox(height: 4),

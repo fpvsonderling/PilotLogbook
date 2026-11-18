@@ -238,7 +238,7 @@ class _FlightFormState extends State<FlightForm> {
                   ),
                   Row(
                     children: [
-                      Expanded(child: _number('Used', _used, decimal: true)),
+                      Expanded(child: _number('Used Ah', _used, decimal: true)),
                       const SizedBox(width: 12),
                       Expanded(child: _number('Temp °C', _temp)),
                     ],
