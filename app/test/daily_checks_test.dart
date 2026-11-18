@@ -92,20 +92,28 @@ void main() {
 
     // First section item by item: one problem, the rest OK.
     final first = fb3Checklist.sections.first;
-    for (final item in first.items) {
+    Future<void> tapItem(String item) async {
+      await tester.ensureVisible(find.text(item));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(item));
+    }
+
+    for (final item in first.items) {
+      await tapItem(item);
       await tester.pumpAndSettle();
     }
     expect(find.text('OK').evaluate().length, greaterThan(1)); // badge + button
     // A second tap turns one item into a problem; the others stay OK.
-    await tester.tap(find.text('Propellers: no cracks / deformation'));
+    await tapItem(first.items[3]);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('crack'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('crack'));
     await tester.pumpAndSettle();
     // Flag another item and clear it again: its part of the note goes away.
-    await tester.tap(find.text('No motor play (move prop tip up/down)'));
+    await tapItem(first.items[5]);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('No motor play (move prop tip up/down)'));
+    await tapItem(first.items[5]);
     await tester.pumpAndSettle();
 
     // OK on every other section, N/A on the cargo compartment.
@@ -144,10 +152,7 @@ void main() {
     final row = db.rows(Tables.dailyChecksFb3).single;
     expect(row['aircraft_id'], drone);
     expect(row['pilot_id'], pilot);
-    expect(
-      row['motors_propellers'],
-      'Propellers: no cracks / deformation: crack',
-    );
+    expect(row['motors_propellers'], '${first.items[3]}: crack');
     expect(row['cargo_compartment'], 'Not used');
     expect(row['storage'], 'Ok');
     expect(find.text('Daily checks · 1'), findsOneWidget);
