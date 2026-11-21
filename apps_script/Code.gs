@@ -1698,6 +1698,167 @@ function updateKeyStatus() {
   Logger.log('Rules updated. Last sign-in filled in for ' + writes.length + ' keys.');
 }
 
+// ------------------------------------------------- old cargo flights import
+//
+// Old cargo flights (2024 FB3 RP training, 2025 Clobotics / Horns Rev 2,
+// March 2026 training) collected from old logs into one Google Sheet, tab
+// "flights", columns as in the Cargo LogBook plus "Payload kg".
+// Run previewOldCargoFlights() first: it only writes a summary to the log.
+// Then importOldCargoFlights() adds the flights to Firebase. Running it again
+// adds nothing twice: each flight has a fixed id, and a flight that is
+// already in the app (same day, take off minute and drone) is left out.
+// People, drones and projects that the app does not know yet are added as
+// inactive; a battery the app does not know stays empty, its name goes to
+// Notes.
+
+const OLD_FLIGHTS_SHEET_ID = '1Kymku4fB68diawa-NnwdOlepMKRNYoTYXAJwT-rNw8g';
+// Pavlo 2026-11-21: Sandra weighs 75 kg, Fiona 95 kg.
+const SPARROW_BY_WEIGHT = { '75': 'Sandra', '95': 'Fiona' };
+// Pavlo 2026-11-21: these two flights were near misses (date + landing or take off).
+const OLD_NEAR_MISSES = ['2025-08-15 14:01', '2025-09-02 10:59'];
+// The three flights whose What said only "Delivery" / "Pickup": 15.06.2025
+// test day (Sandra first, then Fiona, Pavlo's order) and a simulated pickup
+// on the ground in March 2026 training.
+const OLD_MISSION_FIX = {
+  '2025-06-15 10:24': 'Sandra Delivery',
+  '2025-06-15 10:43': 'Fiona Delivery',
+  '2026-03-07 17:34': 'Training',
+};
+
+function previewOldCargoFlights() {
+  const out = oldCargoFlights_(OLD_FLIGHTS_SHEET_ID, false);
+  Logger.log(out.summary);
+  return out;
+}
+
+function importOldCargoFlights() {
+  const out = oldCargoFlights_(OLD_FLIGHTS_SHEET_ID, true);
+  Logger.log(out.summary);
+  return out;
+}
+
+/** Folds case, Polish letters and accents, so "Michał" finds "Michal". */
+function nameKey_(v) {
+  return String(v || '').trim().toLowerCase().replace(/ł/g, 'l')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+}
+
+/** "24.0" -> "24", "6,26" -> "6.26", "" stays "". */
+function oldNumber_(v) {
+  const t = String(v || '').trim().replace(',', '.');
+  if (!t) return '';
+  const n = Number(t);
+  if (isNaN(n)) return '';
+  return String(Math.round(n * 100) / 100);
+}
+
+function oldCargoFlights_(spreadsheetId, write) {
+  const fb = firebaseConfig_();
+  const sheet = SpreadsheetApp.openById(spreadsheetId).getSheetByName('flights');
+  const values = sheet.getDataRange().getDisplayValues();
+  const head = values[0].map(function (h) { return String(h).trim(); });
+  const now = new Date().toISOString();
+  const live = function (t) { return firestoreRows_(fb, t).filter(function (r) { return String(r.deleted) !== '1'; }); };
+  const known = {};
+  ['people', 'projects', 'aircraft', 'batteries', 'mission_types'].forEach(function (t) {
+    known[t] = {};
+    live(t).forEach(function (r) { if (r.name && r.id) known[t][nameKey_(r.name)] = r.id; });
+  });
+  const added = { people: [], projects: [], aircraft: [], mission_types: [] };
+  const writes = [];
+  const idOf = function (table, name, extra) {
+    name = String(name || '').trim();
+    if (!name) return '';
+    const k = nameKey_(name);
+    if (known[table][k]) return known[table][k];
+    const id = 'old-' + table + '-' + k.replace(/[^a-z0-9]+/g, '-');
+    known[table][k] = id;
+    added[table].push(name);
+    const row = { id: id, updated_at: now, deleted: '0', name: name, active: '0' };
+    Object.keys(extra || {}).forEach(function (f) { row[f] = extra[f]; });
+    writes.push(firestoreUpsert_(fb, table + '/' + id, row));
+    return id;
+  };
+  const inApp = {};
+  live('flights').forEach(function (f) {
+    inApp[f.date + ' ' + String(f.takeoff_at || '').slice(0, 5) + ' ' + f.aircraft_id] = true;
+  });
+  const usedIds = {};
+  let count = 0;
+  let skipped = 0;
+  const unknownBatteries = [];
+  values.slice(1).forEach(function (line) {
+    const get = function (name) { const i = head.indexOf(name); return i < 0 ? '' : String(line[i] || '').trim(); };
+    const date = sheetDate_(get('Date'));
+    if (!date) return;
+    const takeoff = clock_(get('Take off'));
+    const land = clock_(get('Land'));
+    let drone = get('Drone');
+    if (/^\d+(\.0+)?$/.test(drone)) drone = drone.replace(/\.0+$/, '');
+    const aircraftId = idOf('aircraft', drone, { model: 'FB3', serial: drone, usage: 'cargo' });
+    if (inApp[date + ' ' + takeoff.slice(0, 5) + ' ' + aircraftId]) { skipped++; return; }
+    const payload = get('Payload kg').replace(/\s+/g, ' ');
+    let mission = OLD_MISSION_FIX[date + ' ' + takeoff.slice(0, 5)] || get('What');
+    const robot = SPARROW_BY_WEIGHT[payload];
+    if (robot && get('Project') === 'Horns Rev 2') mission = mission.replace(/\b(Sandra|Fiona)\b/g, robot);
+    let notes = get('Notes');
+    const batt = oldNumber_(get('Batt')) || get('Batt');
+    let batteryId = '';
+    if (batt) {
+      batteryId = known.batteries[nameKey_(batt)] || '';
+      if (!batteryId) { notes = (notes ? notes + ' ' : '') + 'Batt ' + batt + '.'; unknownBatteries.push(date + ' ' + batt); }
+    }
+    if (payload && payload !== '0') notes = (notes ? notes + ' ' : '') + 'Payload ' + payload + ' kg.';
+    const aborted = get('Aborted').replace(/\.0+$/, '') === '1' || /abort/i.test(mission);
+    if (aborted && !/abort/i.test(mission)) mission = mission ? mission + ', Aborted' : 'Aborted';
+    const nearMiss = get('Near miss').replace(/\.0+$/, '') === '1' ||
+      OLD_NEAR_MISSES.some(function (k) { return (date + ' ' + land).indexOf(k) === 0 || (date + ' ' + takeoff).indexOf(k) === 0; });
+    if (nearMiss && !/near.*miss/i.test(mission)) mission = mission ? mission + ', Near miss' : 'Near miss';
+    mission.split(',').forEach(function (p) { idOf('mission_types', p.trim()); });
+    let id = 'old-flight-' + date + '-' + (takeoff || land || '0').replace(/:/g, '') + '-' + nameKey_(drone).replace(/[^a-z0-9]+/g, '');
+    while (usedIds[id]) id += 'b';
+    usedIds[id] = true;
+    const person = function (col) { return idOf('people', get(col), { roles: '' }); };
+    const temp = oldNumber_(get('Temp'));
+    writes.push(firestoreUpsert_(fb, 'flights/' + id, {
+      id: id,
+      updated_at: now,
+      deleted: '0',
+      date: date,
+      kind: 'cargo',
+      project_id: idOf('projects', get('Project')),
+      aircraft_id: aircraftId,
+      battery_id: batteryId,
+      takeoff_at: takeoff,
+      landing_at: land,
+      duration_s: seconds_(takeoff, land),
+      battery_pct: '',
+      used: oldNumber_(get('Used')),
+      temp_c: temp ? String(Math.round(Number(temp))) : '',
+      mission: mission,
+      rp_id: person('RP'),
+      pa_id: person('PA'),
+      spotter_id: person('Spotter'),
+      notes: notes,
+      aborted: aborted ? '1' : '',
+      near_miss: nearMiss ? '1' : '',
+    }));
+    count++;
+  });
+  const summary = (write ? 'IMPORTED ' : 'PREVIEW (nothing written): ') + count + ' flights' +
+    (skipped ? ', ' + skipped + ' already in the app left out' : '') +
+    '. New people (inactive): ' + (added.people.join(', ') || 'none') +
+    '. New drones (inactive): ' + (added.aircraft.join(', ') || 'none') +
+    '. New projects (inactive): ' + (added.projects.join(', ') || 'none') +
+    '. New mission types: ' + (added.mission_types.join(', ') || 'none') +
+    '. Unknown batteries (name put in Notes): ' + (unknownBatteries.join(', ') || 'none') + '.';
+  if (write) {
+    writes.push(firestoreStamp_(fb, ['flights', 'people', 'projects', 'aircraft', 'mission_types']));
+    commitAll_(fb, writes);
+  }
+  return { count: count, skipped: skipped, added: added, unknownBatteries: unknownBatteries, summary: summary };
+}
+
 // ------------------------------------------------------ push notifications
 //
 // Who gets what (the admin decides nothing here, each person in the app

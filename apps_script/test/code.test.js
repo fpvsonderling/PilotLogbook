@@ -992,3 +992,51 @@ test('push: competencies 30, 7 and 0 days before, own for the pilot, everyone fo
   assert.strictEqual(out.messages.find((m) => m.person === 'p-boss').body, 'Anna: GWO expires in 7 days\nTom: Medical expires in 30 days');
 });
 
+
+test('old cargo flights: names found or added inactive, Sandra/Fiona by weight, nothing twice', () => {
+  const s = load();
+  const docs = s.firebase.docs;
+  docs['people/p1'] = { id: 'p1', name: 'Adam Madziala', deleted: '0' };
+  docs['projects/pr1'] = { id: 'pr1', name: 'Horns Rev 2', deleted: '0' };
+  docs['aircraft/a24'] = { id: 'a24', name: '24', deleted: '0' };
+  docs['batteries/b41'] = { id: 'b41', name: '41', deleted: '0' };
+  ['Sandra Delivery', 'Fiona Pickup', 'Aborted', 'Near miss', 'Training'].forEach((n, i) => (docs['mission_types/m' + i] = { id: 'm' + i, name: n, deleted: '0' }));
+  docs['flights/existing'] = { id: 'existing', date: '2025-08-20', takeoff_at: '12:51:00', aircraft_id: 'a24', deleted: '0' };
+  s.oldSheets['1Kymku4fB68diawa-NnwdOlepMKRNYoTYXAJwT-rNw8g'] = [
+    ['Date', 'Project', 'Drone', 'Take off', 'Land', 'Time', 'Batt', 'Used', 'Temp', 'What', 'RP', 'PA', 'Spotter', 'Notes', 'Aborted', 'Near miss', 'Payload kg'],
+    ['2025-08-18', 'Horns Rev 2', '24', '11:05:00', '11:09:00', '', '41', '3,21', '37', 'Sandra Pickup', 'Antoni Zbyszowski', 'Adam Madziała', '', 'Hook fault.', '', '', '95'],
+    ['2025-08-20', 'Horns Rev 2', '24.0', '15:01:00', '15:09:00', '', '49', '8.87', '46.0', 'Double', 'Wojtek', 'Antoni Zbyszowski', '', '', '', '', ''],
+    ['2025-08-20', 'Horns Rev 2', '24', '12:51:00', '12:55:00', '', '42', '3.57', '40', 'Sandra Delivery', 'Wojtek', '', '', '', '', '', ''],
+    ['2024-01-03', 'FlyingBasket FB3 RP Training', '009', '15:12:30', '15:15:00', '', '', '', '41', 'Training', 'Adam Madziala', '', '', '', '1', '', '0'],
+  ];
+  const preview = s.ctx.previewOldCargoFlights();
+  assert.strictEqual(preview.count, 3);
+  assert.strictEqual(preview.skipped, 1);
+  assert.strictEqual(docs['flights/old-flight-2025-08-18-110500-24'], undefined, 'preview writes nothing');
+
+  const out = s.ctx.importOldCargoFlights();
+  assert.deepStrictEqual(Array.from(out.added.people), ['Antoni Zbyszowski', 'Wojtek']);
+  assert.deepStrictEqual(Array.from(out.added.aircraft), ['009']);
+  assert.deepStrictEqual(Array.from(out.added.projects), ['FlyingBasket FB3 RP Training']);
+  assert.strictEqual(docs['people/old-people-wojtek'].active, '0');
+  const f = docs['flights/old-flight-2025-08-18-110500-24'];
+  assert.strictEqual(f.mission, 'Fiona Pickup');
+  assert.strictEqual(f.pa_id, 'p1');
+  assert.strictEqual(f.battery_id, 'b41');
+  assert.strictEqual(f.used, '3.21');
+  assert.strictEqual(f.duration_s, '240');
+  assert.strictEqual(f.notes, 'Hook fault. Payload 95 kg.');
+  const d = docs['flights/old-flight-2025-08-20-150100-24'];
+  assert.strictEqual(d.battery_id, null);
+  assert.strictEqual(d.notes, 'Batt 49.');
+  assert.strictEqual(d.temp_c, '46');
+  const t = docs['flights/old-flight-2024-01-03-151230-009'];
+  assert.strictEqual(t.mission, 'Training, Aborted');
+  assert.strictEqual(t.aborted, '1');
+  assert.strictEqual(t.notes, null);
+
+  const flights = () => Object.keys(docs).filter((k) => k.startsWith('flights/')).length;
+  const before = flights();
+  s.ctx.importOldCargoFlights();
+  assert.strictEqual(flights(), before, 'a second run adds nothing');
+});
